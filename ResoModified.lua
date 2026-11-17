@@ -19285,13 +19285,13 @@ do
 							flag12 = true
 						end
 
-						-- WELD TELEPORT (always on for the far case): a rigid AlignPosition/AlignOrientation (physics-enforced,
-						-- re-aimed every loop tick as the target/prediction moves) instead of a raw per-Heartbeat CFrame write.
-						-- Still hidden with the same RenderStep snap-back. Our own collisions are dropped for the duration -
-						-- without that, physics fighting the rigid constraint against anything we overlap at the far end was
-						-- the main source of the jitter/sticking ("a little buggy sometimes").
-						local useWeld = flag12
-						local weldAttach0, weldAttach1, weldPos, weldOri = nil, nil, nil, nil
+						-- a rigid AlignPosition/AlignOrientation "weld" was tried here, but it fights the RenderStep
+						-- snap-back right below it: that snap-back forcibly puts our HRP back at the hidden/old
+						-- CFrame every render frame to hide the teleport, while the rigid constraint is simultaneously
+						-- forcing it back to the real target every physics step - two competing CFrame writers on the
+						-- same part every frame, which is exactly what was "bugging a lot" instead of holding still.
+						-- Back to the plain per-Heartbeat CFrame write; only the collision-drop (which has nothing to
+						-- do with the weld itself) is kept, since fewer physics collisions at the far end still helps.
 
 						local flag13 = arg.Name == "HumanoidRootPart" or arg.Name == "Torso"
 						local v27 = nil
@@ -19330,37 +19330,15 @@ do
 								head.CFrame = cframe
 							end)
 
-							if useWeld then
-								pcall(tbl12.ToggleCollisions, v24, false)
-								weldAttach0 = Instance.new("Attachment")
-								weldAttach0.Parent = v25
-								weldAttach1 = Instance.new("Attachment")
-								weldAttach1.CFrame = cframe3
-								weldAttach1.Parent = workspace.Terrain
+							-- fewer physics collisions fighting us at the far end while this hidden teleport is active
+							pcall(tbl12.ToggleCollisions, v24, false)
 
-								weldPos = Instance.new("AlignPosition")
-								weldPos.Attachment0 = weldAttach0
-								weldPos.Attachment1 = weldAttach1
-								weldPos.RigidityEnabled = true
-								weldPos.MaxForce = math.huge
-								weldPos.Responsiveness = 200
-								weldPos.Parent = v25
-
-								weldOri = Instance.new("AlignOrientation")
-								weldOri.Attachment0 = weldAttach0
-								weldOri.Attachment1 = weldAttach1
-								weldOri.RigidityEnabled = true
-								weldOri.MaxTorque = math.huge
-								weldOri.Responsiveness = 200
-								weldOri.Parent = v25
-							else
-								connection = RunService.Heartbeat:Connect(function()
-									cframe2 = v25.CFrame
-									cframe = head.CFrame
-									v25.CFrame = cframe3
-									head.CFrame = cframe3
-								end)
-							end
+							connection = RunService.Heartbeat:Connect(function()
+								cframe2 = v25.CFrame
+								cframe = head.CFrame
+								v25.CFrame = cframe3
+								head.CFrame = cframe3
+							end)
 						end
 
 						local function fn22()
@@ -19371,30 +19349,7 @@ do
 								connection = nil
 							end
 
-							if useWeld then
-								pcall(tbl12.ToggleCollisions, v24, true)
-							end
-
-							if weldPos then
-								weldPos:Destroy()
-								weldPos = nil
-							end
-
-							if weldOri then
-								weldOri:Destroy()
-								weldOri = nil
-							end
-
-							if weldAttach0 then
-								weldAttach0:Destroy()
-								weldAttach0 = nil
-							end
-
-							if weldAttach1 then
-								weldAttach1:Destroy()
-								weldAttach1 = nil
-							end
-
+							pcall(tbl12.ToggleCollisions, v24, true)
 							head.CFrame = cframe
 							v25.CFrame = cframe2
 						end
@@ -19410,10 +19365,6 @@ do
 							while not flag11 and arg.Parent and not tbl12.IsPartOwner(arg) and v26.Health ~= 0 and v25.Parent and (not arg3 or arg3()) and tick() - now3 < arg2 do
 								if flag12 then
 									cframe3 = tbl12.PredictCFrame(arg) - Vector3.new(0, 22, 0)
-
-									if useWeld and weldAttach1 then
-										weldAttach1.CFrame = cframe3
-									end
 								end
 
 								RunService.Heartbeat:Wait()
@@ -25978,25 +25929,19 @@ end
 							-- 4. ANCHOR
 							blobHRP.Anchored = true
 
-							-- 5. RUN THE CODE
-							humanoid.EvaluateStateMachine = false
-							humanoid.BreakJointsOnDeath = false
-							humanoid.Health = 0
-							task.wait(1)
+							-- 5. RUN THE CODE: Position Desync instead of the old kill -> respawn -> ragdoll loop (that
+							-- was the slow part - up to ~10s start to finish). Desync stalls what the server sees of our
+							-- position for a moment, which is enough room to teleport straight onto the now-anchored,
+							-- far-away seat and have the sit actually take, with no fake death needed.
+							local desyncWasOn = tbl8.Desync
+							tbl12.SetDesync(true)
 
+							local success = false
 							local started = os.clock()
-							local ragdolled = false
 
-							while os.clock() - started < 4 and not flag11 and tbl8.SeatlessBlob do
+							while os.clock() - started < 1.5 and not flag11 and tbl8.SeatlessBlob do
 								RunService.Heartbeat:Wait()
-
-								if not ragdolled then
-									ragdolled = true
-
-									pcall(function()
-										tbl11.RagdollRemote:FireServer(root, math.huge)
-									end)
-								end
+								pcall(tbl12.Teleport, root, blobHRP.CFrame * CFrame.new(0, 2, 0))
 
 								if not humanoid.SeatPart then
 									humanoid.Sit = false
@@ -26011,30 +25956,14 @@ end
 									end
 								end)
 
-								humanoid.EvaluateStateMachine = true
+								if humanoid.SeatPart == blobHRP then
+									success = true
+									break
+								end
 							end
 
-							local success = false
-							local checkStart = os.clock()
-
-							while os.clock() - checkStart < 5 and not flag11 and tbl8.SeatlessBlob do
-								task.wait()
-								local occupant = blobHRP.Occupant
-								local occupantCharacter = occupant and occupant.Parent
-								local newCharacter = select(1, tbl12.Char())
-
-								if occupantCharacter == oldCharacter or occupantCharacter == newCharacter then
-									success = true
-									break
-								end
-
-								local seatWeld = blobHRP:FindFirstChild("SeatWeld")
-								local weldedChar = seatWeld and seatWeld.Part1 and seatWeld.Part1.Parent
-
-								if weldedChar == oldCharacter or weldedChar == newCharacter then
-									success = true
-									break
-								end
+							if not desyncWasOn then
+								tbl12.SetDesync(false)
 							end
 
 							if not (flag11 or not tbl8.SeatlessBlob) then
@@ -32574,7 +32503,10 @@ end
 				end
 
 				connection = v24.Seated:Connect(function(arg, arg2)
-					if arg and arg2 and arg2.Parent and arg2.Parent.Name == "CreatureBlobman" then
+					-- the Seatless Blob is renamed to avoid being picked up by Sit on Blobman / Blob Kick Player /
+					-- Auto Sit Blobman's own lookups, but sitting on it should still count for Kick/Kill/etc - so
+					-- it's matched by reference here too, not just by the stock "CreatureBlobman" name.
+					if arg and arg2 and arg2.Parent and (arg2.Parent.Name == "CreatureBlobman" or arg2.Parent == tbl7.SeatlessBlobModel) then
 						parent = arg2.Parent
 					else
 						parent = nil
