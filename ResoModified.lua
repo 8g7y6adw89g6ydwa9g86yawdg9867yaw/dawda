@@ -19285,16 +19285,13 @@ do
 							flag12 = true
 						end
 
-						-- PCLD TELEPORT: instead of physically teleporting our whole body (root + head) near the target every
-						-- Heartbeat and hiding it with a RenderStep snap-back, weld ONLY our PCLD (the part the server actually
-						-- reads our position from) to the claim point - our real body never moves, on our screen or the server's.
-						-- Falls back to the normal camera-fake automatically if our PCLD hasn't been found yet.
-						local myPcld = tbl8.PCLDTeleport and flag12 and tbl7.PCLD[localPlayer]
-						local pcldSaved = nil
-
-						if myPcld then
-							flag12 = false -- skip the root/head camera-fake entirely; the PCLD is doing the job instead
-						end
+						-- WELD TELEPORT (always on for the far case): a rigid AlignPosition/AlignOrientation (physics-enforced,
+						-- re-aimed every loop tick as the target/prediction moves) instead of a raw per-Heartbeat CFrame write.
+						-- Still hidden with the same RenderStep snap-back. Our own collisions are dropped for the duration -
+						-- without that, physics fighting the rigid constraint against anything we overlap at the far end was
+						-- the main source of the jitter/sticking ("a little buggy sometimes").
+						local useWeld = flag12
+						local weldAttach0, weldAttach1, weldPos, weldOri = nil, nil, nil, nil
 
 						local flag13 = arg.Name == "HumanoidRootPart" or arg.Name == "Torso"
 						local v27 = nil
@@ -19333,12 +19330,37 @@ do
 								head.CFrame = cframe
 							end)
 
-							connection = RunService.Heartbeat:Connect(function()
-								cframe2 = v25.CFrame
-								cframe = head.CFrame
-								v25.CFrame = cframe3
-								head.CFrame = cframe3
-							end)
+							if useWeld then
+								pcall(tbl12.ToggleCollisions, v24, false)
+								weldAttach0 = Instance.new("Attachment")
+								weldAttach0.Parent = v25
+								weldAttach1 = Instance.new("Attachment")
+								weldAttach1.CFrame = cframe3
+								weldAttach1.Parent = workspace.Terrain
+
+								weldPos = Instance.new("AlignPosition")
+								weldPos.Attachment0 = weldAttach0
+								weldPos.Attachment1 = weldAttach1
+								weldPos.RigidityEnabled = true
+								weldPos.MaxForce = math.huge
+								weldPos.Responsiveness = 200
+								weldPos.Parent = v25
+
+								weldOri = Instance.new("AlignOrientation")
+								weldOri.Attachment0 = weldAttach0
+								weldOri.Attachment1 = weldAttach1
+								weldOri.RigidityEnabled = true
+								weldOri.MaxTorque = math.huge
+								weldOri.Responsiveness = 200
+								weldOri.Parent = v25
+							else
+								connection = RunService.Heartbeat:Connect(function()
+									cframe2 = v25.CFrame
+									cframe = head.CFrame
+									v25.CFrame = cframe3
+									head.CFrame = cframe3
+								end)
+							end
 						end
 
 						local function fn22()
@@ -19349,6 +19371,30 @@ do
 								connection = nil
 							end
 
+							if useWeld then
+								pcall(tbl12.ToggleCollisions, v24, true)
+							end
+
+							if weldPos then
+								weldPos:Destroy()
+								weldPos = nil
+							end
+
+							if weldOri then
+								weldOri:Destroy()
+								weldOri = nil
+							end
+
+							if weldAttach0 then
+								weldAttach0:Destroy()
+								weldAttach0 = nil
+							end
+
+							if weldAttach1 then
+								weldAttach1:Destroy()
+								weldAttach1 = nil
+							end
+
 							head.CFrame = cframe
 							v25.CFrame = cframe2
 						end
@@ -19356,40 +19402,36 @@ do
 						local ok, result = pcall(function()
 							if flag12 then
 								fn21()
-							elseif myPcld then
-								pcldSaved = myPcld.CFrame
 							end
 
 							arg2 = arg2 or 0.65
 							local now3 = tick()
 
 							while not flag11 and arg.Parent and not tbl12.IsPartOwner(arg) and v26.Health ~= 0 and v25.Parent and (not arg3 or arg3()) and tick() - now3 < arg2 do
-								local claimCF = nil
-
 								if flag12 then
 									cframe3 = tbl12.PredictCFrame(arg) - Vector3.new(0, 22, 0)
-									claimCF = cframe3
-								elseif myPcld then
-									claimCF = tbl12.PredictCFrame(arg) - Vector3.new(0, 22, 0)
 
-									if myPcld.Parent then
-										pcall(function()
-											myPcld.CFrame = claimCF
-										end)
+									if useWeld and weldAttach1 then
+										weldAttach1.CFrame = cframe3
 									end
 								end
 
 								RunService.Heartbeat:Wait()
-								tbl12.Grab(arg, claimCF)
+								local grab = tbl12.Grab
+								local v28
+
+								if flag12 then
+									v28 = cframe3
+								else
+									v28 = nil
+								end
+
+								grab(arg, v28)
 							end
 						end)
 
 						if flag12 then
 							pcall(fn22)
-						elseif myPcld and pcldSaved and myPcld.Parent then
-							pcall(function()
-								myPcld.CFrame = pcldSaved
-							end)
 						end
 
 						if v27 then
@@ -20669,7 +20711,7 @@ end
 
 					if humanoid and humanoid.Value == false then
 						tbl7.States.Ragdolling = true
-						local ragdollRSC = v17:FindFirstChild("RagdollRSC") or tbl12.SpawnToy(tbl9.RagdollToy or "PalletLightBrown")
+						local ragdollRSC = v17:FindFirstChild("RagdollRSC") or tbl12.SpawnToy("PalletLightBrown")
 						local soundPart = ragdollRSC and ragdollRSC:WaitForChild("SoundPart", 0.5)
 						local main = soundPart and ragdollRSC:WaitForChild("Main", 0.5)
 						if not main or not tbl12.SNO(soundPart) then
@@ -21591,7 +21633,19 @@ end
 								tbl12.ResetVelocity(rootPart)
 								local position = torso.Position
 								local lookVector = torso.CFrame.LookVector
-								local unit = Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+								local flatLook = Vector3.new(lookVector.X, 0, lookVector.Z)
+								-- looking near-straight up/down flattens to a near-zero vector; .Unit on that is NaN, which
+								-- poisons every CFrame.lookAt below and is what was tilting the pin into a broken angle.
+								-- Fall back to the camera's flattened look direction instead.
+								local unit
+
+								if flatLook.Magnitude > 0.05 then
+									unit = flatLook.Unit
+								else
+									local camLook = currentCamera.CFrame.LookVector
+									local flatCam = Vector3.new(camLook.X, 0, camLook.Z)
+									unit = flatCam.Magnitude > 0.05 and flatCam.Unit or Vector3.new(0, 0, -1)
+								end
 								tbl7.States["Anti Grab"] = true
 								local flag12 = tbl9.AGType == "Escapes Anything, but buggy"
 								local sit = tbl9.AGType == "Anti-Kill"
@@ -21638,6 +21692,7 @@ end
 								local n36 = 0
 								local n37 = 0
 								local nBypass = 0
+								local nBypassOwn = 0
 								local nSlow = 0
 								local lostAt = nil
 								local finished = false
@@ -21709,10 +21764,12 @@ end
 								local function step(deltaTime, render)
 									local now4 = tick()
 
+									-- base rate 1/33s (fewer Struggle/RagdollRemote calls per second than the old 1/38s;
+									-- this was the main source of the ping spike while pinned) - still well above what's needed to hold.
 									if now4 >= n36 then
 										tbl11.Struggle:FireServer()
 										tbl12.AGCutLines(v23)
-										local agGap = 0.02631578947368421
+										local agGap = 0.030303030303030304
 									local agPingLv = tbl12.PingLevel()
 
 									if agPingLv >= 2 then
@@ -21736,7 +21793,7 @@ end
 										end
 
 										fireServer(ragdollRemote, rootPart, n38)
-										local agGap2 = 0.02631578947368421
+										local agGap2 = 0.030303030303030304
 									local agPingLv2 = tbl12.PingLevel()
 
 									if agPingLv2 >= 2 then
@@ -21790,6 +21847,29 @@ end
 										nBypass = now4 + 0.05
 										pcall(sethiddenproperty, rootPart, "PhysicsRepRootPart", nil)
 										pcall(sethiddenproperty, rootPart, "NetworkIsSleeping", false)
+									end
+
+									-- the hidden-property clear above is purely local/cosmetic: the kicker's EKI keeps re-asserting
+									-- real network ownership of our root via SetNetworkOwner, which clearing our own properties
+									-- never touches. This is the part that actually fights back - reclaiming ownership of our own
+									-- root the same way the kicker claims it - which is what "EKI Bypass" was missing. Throttled well
+									-- below the Struggle/RagdollRemote rate above (and backed off further under the ping governor)
+									-- so it doesn't add to the remote spam.
+									if bypass and now4 >= nBypassOwn then
+										local bypassGap = 0.12
+										local bypassPingLv = tbl12.PingLevel()
+
+										if bypassPingLv >= 2 then
+											bypassGap = 0.3
+										elseif bypassPingLv == 1 then
+											bypassGap = 0.2
+										end
+
+										nBypassOwn = now4 + bypassGap
+
+										if not tbl12.IsNetworkOwner(rootPart) then
+											tbl12.Grab(rootPart)
+										end
 									end
 
 									if now4 >= nSlow then
@@ -23772,6 +23852,40 @@ end
 								end
 							end)
 						end
+
+						-- ALLOW SITTING, "re-gucci on jump off": doesn't touch fn24's own internals at all. While GucciAntiGrab
+						-- and Allow Sitting are both on, it just watches your Humanoid.SeatPart; the moment it goes from
+						-- seated to not-seated (you jumped/got up), it switches GucciAntiGrab off then back on through the
+						-- same public SetGucciAntiGrab used above, which makes fn24 destroy whatever it had and reacquire a
+						-- fresh one. Letting you sit on OTHER players' vehicles in the first place isn't something this
+						-- touches - I found no code here that blocks that, so if something still stops you, tell me what
+						-- happens and I'll look again.
+						task.spawn(function()
+							local wasSeated = false
+
+							while not flag11 do
+								task.wait(0.2)
+
+								if not (tbl8.AllowSitting and tbl8.GucciAntiGrab) then
+									wasSeated = false
+									continue
+								end
+
+								local v22, v23, v24 = tbl12.Char()
+								local seated = v24 and v24.SeatPart ~= nil
+
+								if wasSeated and not seated then
+									tbl12.SetGucciAntiGrab(false)
+									task.wait(0.1)
+
+									if tbl8.AllowSitting and toggles.GucciAntiGrab then
+										toggles.GucciAntiGrab:SetValue(true)
+									end
+								end
+
+								wasSeated = seated
+							end
+						end)
 					end
 				end
 
@@ -25803,6 +25917,136 @@ end
 						if arg and arg:IsA("Model") then
 							tbl11.DestroyToy:FireServer(arg)
 						end
+					end
+
+					-- SEATLESS BLOB, in order: (1) spawn the Blobman at a fixed, far-away world position, (2) sit on it
+					-- normally while it's still unanchored and welds like any other toy, (3) jump, to prove we can
+					-- still get in/out before anything is locked down, (4) THEN anchor its VehicleSeat (its "HRP")
+					-- - which immediately kicks us back out, so (5) run the kill -> ragdoll -> spam Sit/fireproximityprompt
+					-- code to force the seat to take anyway, the same trick an anchored seat needs since it rejects a
+					-- normal sit. Off just deletes the blob again.
+					tbl12.SeatlessBlob = function(enable)
+						if tbl7.SeatlessBlobModel and tbl7.SeatlessBlobModel.Parent then
+							tbl12.DestroyToy(tbl7.SeatlessBlobModel)
+						end
+						tbl7.SeatlessBlobModel = nil
+
+						if not enable then
+							return
+						end
+
+						-- 1. SPAWN
+						local blob = tbl12.SpawnToy("CreatureBlobman", CFrame.new(283300, 0, -5705000))
+
+						if not blob then
+							return
+						end
+
+						-- renamed so the normal Blobman features (Sit on Blobman / Blob Kick Player / Auto Sit
+						-- Blobman, all of which look up a toy named "CreatureBlobman") never find and reuse this one
+						blob.Name = "SeatlessBlobman"
+						local blobHRP = blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1)
+
+						if not blobHRP then
+							tbl12.DestroyToy(blob)
+							return
+						end
+
+						tbl7.SeatlessBlobModel = blob
+
+						task.spawn(function()
+							local oldCharacter, root, humanoid = tbl12.Char()
+
+							if not (oldCharacter and root and humanoid) then
+								return
+							end
+
+							-- 2. SIT
+							pcall(blobHRP.Sit, blobHRP, humanoid)
+							task.wait(0.3)
+
+							-- 3. JUMP
+							pcall(function()
+								humanoid.Jump = true
+							end)
+							task.wait(0.3)
+
+							if not (tbl8.SeatlessBlob and blobHRP.Parent) then
+								return
+							end
+
+							-- 4. ANCHOR
+							blobHRP.Anchored = true
+
+							-- 5. RUN THE CODE
+							humanoid.EvaluateStateMachine = false
+							humanoid.BreakJointsOnDeath = false
+							humanoid.Health = 0
+							task.wait(1)
+
+							local started = os.clock()
+							local ragdolled = false
+
+							while os.clock() - started < 4 and not flag11 and tbl8.SeatlessBlob do
+								RunService.Heartbeat:Wait()
+
+								if not ragdolled then
+									ragdolled = true
+
+									pcall(function()
+										tbl11.RagdollRemote:FireServer(root, math.huge)
+									end)
+								end
+
+								if not humanoid.SeatPart then
+									humanoid.Sit = false
+								end
+
+								pcall(blobHRP.Sit, blobHRP, humanoid)
+								pcall(function()
+									local prompt = blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
+
+									if prompt then
+										fireproximityprompt(prompt)
+									end
+								end)
+
+								humanoid.EvaluateStateMachine = true
+							end
+
+							local success = false
+							local checkStart = os.clock()
+
+							while os.clock() - checkStart < 5 and not flag11 and tbl8.SeatlessBlob do
+								task.wait()
+								local occupant = blobHRP.Occupant
+								local occupantCharacter = occupant and occupant.Parent
+								local newCharacter = select(1, tbl12.Char())
+
+								if occupantCharacter == oldCharacter or occupantCharacter == newCharacter then
+									success = true
+									break
+								end
+
+								local seatWeld = blobHRP:FindFirstChild("SeatWeld")
+								local weldedChar = seatWeld and seatWeld.Part1 and seatWeld.Part1.Parent
+
+								if weldedChar == oldCharacter or weldedChar == newCharacter then
+									success = true
+									break
+								end
+							end
+
+							if not (flag11 or not tbl8.SeatlessBlob) then
+								pcall(function()
+									lib:Notify({
+										Title = "Resonance",
+										Description = "Seatless Blob: " .. (success and "seated" or "failed to seat") .. " - Anchored: " .. tostring(blobHRP.Anchored),
+										IconColor = Color3.new(1, 1, 1),
+									})
+								end)
+							end
+						end)
 					end
 
 					tbl12.GetInventory = function(arg)
@@ -30219,6 +30463,11 @@ end
 				return
 			end
 			local creatureBlobman = v17:FindFirstChild("CreatureBlobman")
+
+			-- never reuse the Seatless Blob's anchored toy here - it spawns its own fresh one instead
+			if creatureBlobman == tbl7.SeatlessBlobModel then
+				creatureBlobman = nil
+			end
 			local vehicleSeat = creatureBlobman and creatureBlobman:FindFirstChild("VehicleSeat")
 			local flag13 = vehicleSeat and (vehicleSeat.Occupant == nil or vehicleSeat.Occupant == v24)
 
@@ -32483,7 +32732,7 @@ end
 
 		do
 			local function fn21()
-				return tbl8.PCLDESP or tbl8.AntiKick or tbl8.PCLDTeleport
+				return tbl8.PCLDESP or tbl8.AntiKick
 			end
 
 			task.spawn(function()
@@ -33431,7 +33680,7 @@ Escape Timer: %*]]
 			local v23 = nil
 
 			while true do
-				task.wait(tbl9.InputLgDelay)
+				task.wait(tbl9.AntiOwnerMethod == "Fast Grab & Drop" and 0.01 or tbl9.InputLgDelay)
 
 				if flag11 then
 					if v22 then
@@ -33461,6 +33710,17 @@ Escape Timer: %*]]
 						v22 = tbl12.SpawnToy(tbl9.AntiInputType, CFrame.new(0, 1e20, 0), nil, true)
 						if not v22 then
 							continue
+						end
+
+						if tbl9.AntiOwnerMethod == "Silent" then
+							for _, v22Sound in pairs(v22:GetDescendants()) do
+								if v22Sound:IsA("Sound") then
+									pcall(function()
+										v22Sound.Volume = 0
+										v22Sound:Stop()
+									end)
+								end
+							end
 						end
 					end
 
@@ -34197,7 +34457,16 @@ Escape Timer: %*]]
 			pcall(tbl12.ToggleMotor6D, character, true, true)
 			pcall(tbl12.RepositionLimbs, character, true)
 			pcall(tbl12.ToggleCollisions, character, false, false, true)
-			pcall(tbl12.ResetVelocity, hrp)
+
+			-- a full ResetVelocity (zeroing X/Y/Z) is what was desyncing your PCLD while sprinting: it's a sudden
+			-- stop from full speed to zero in one frame, which the server reads as an invalid movement jump. Only
+			-- the vertical component is a snowball/ragdoll impulse, so only that gets cancelled - your horizontal
+			-- (running) velocity carries through and the server sees continuous movement instead of a snap-stop.
+			pcall(function()
+				hrp.AssemblyAngularVelocity = Vector3.zero
+				local velocity = hrp.AssemblyLinearVelocity
+				hrp.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+			end)
 		end
 
 		-- instant reaction: the moment ANYTHING sets Humanoid.Ragdolled true (a snowball, a fall, anything else), it is
@@ -35431,10 +35700,16 @@ Escape Timer: %*]]
 			end
 
 			local function fn23(arg, arg2, arg3)
-				-- directly above us, not in a circle (arg2 = index 1..arg3 for multiple targets, stacked 4 studs apart
-				-- vertically so several grabbed players don't occupy the exact same point)
+				-- arg2 = index 1..arg3 for however many targets are selected. Exactly 1 target: directly above us.
+				-- 2 or more: back to a circle around us (10 stud radius), so they don't stack on the same point.
 				local nkOffset = tbl9.NKOffset
-				return arg.Position + Vector3.new(0, nkOffset + (arg2 - 1) * 4, 0)
+
+				if arg3 <= 1 then
+					return arg.Position + Vector3.new(0, nkOffset, 0)
+				end
+
+				local n36 = 6.2831853071795862 / arg3 * (arg2 - 1)
+				return arg.Position + Vector3.new(math.cos(n36) * 10, nkOffset, math.sin(n36) * 10)
 			end
 
 			-- EKI: armed once per acquisition (no more re-scheduling a fresh task.delay every single frame in range), with a
@@ -35472,7 +35747,7 @@ Escape Timer: %*]]
 					else
 						st.lostAt = st.lostAt or os.clock()
 
-						if os.clock() - st.lostAt >= 0.3 then
+						if os.clock() - st.lostAt >= 0.4 then
 							fn21(root, nil)
 							st.ekiOn, st.root, st.lostAt = false, nil, nil
 						end
@@ -35560,16 +35835,17 @@ Escape Timer: %*]]
 
 											kickAP = Instance.new("BodyPosition")
 											local bodyGyro = Instance.new("BodyGyro")
-											-- a stronger hold than the stock 200 / default-P: the damping ratio is kept (D scales with
-											-- sqrt(P)) so it still doesn't ring, it just resists a lot harder.
-											kickAP.P = 16000
-											kickAP.D = 260
+											-- a stronger hold than before (and still no ping cost - this is a local physics constraint,
+											-- not a remote): the damping ratio is kept (D scales with sqrt(P)) so it still doesn't ring,
+											-- it just resists a lot harder against someone trying to walk/jump out of it.
+											kickAP.P = 24000
+											kickAP.D = 320
 											kickAP.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 											kickAP.Position = v29
 											kickAP.Parent = v27
-											bodyGyro.P = 5000
+											bodyGyro.P = 7500
 											bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-											bodyGyro.D = 260
+											bodyGyro.D = 320
 											bodyGyro.CFrame = CFrame.new()
 											bodyGyro.Parent = v27
 											kickAP.Name = "KickAP"
@@ -35596,9 +35872,9 @@ Escape Timer: %*]]
 											local resistLv = tbl12.PingLevel()
 
 											if resistLv >= 2 then
-												resistGap = 0.1
+												resistGap = 0.08
 											elseif resistLv == 1 then
-												resistGap = 0.06
+												resistGap = 0.05
 											end
 
 											if os.clock() - (st.lastResist or 0) >= resistGap then
@@ -35624,7 +35900,7 @@ Escape Timer: %*]]
 											-- SETOWNER 1.2x FASTER THAN DESTROYLINE: both now fire on their own clock (not a single delayed RNO or an
 											-- every-frame Grab), with the destroyline interval always 1.2x the setowner interval, in real seconds so the
 											-- ratio holds regardless of fps. "Faster but worse" just uses a smaller base (more remotes/sec, same 1.2x ratio).
-											local nkBase = (tbl9.NKDelayMode == "Faster but worse") and 0.004 or 0.007
+											local nkBase = (tbl9.NKDelayMode == "Faster but worse") and 0.008 or 0.012
 											local nkPingLv = tbl12.PingLevel()
 
 											if nkPingLv >= 2 then
@@ -35660,7 +35936,7 @@ Escape Timer: %*]]
 											tbl12.Teleport(v27, v29)
 											-- the weld/claim phase (far away, teleport + setowner): faster base than the in-range phase, since
 											-- this is purely about getting ownership established as quickly as possible
-											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.0025 or 0.0045
+											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.005 or 0.008
 											local nkPingLv2 = tbl12.PingLevel()
 
 											if nkPingLv2 >= 2 then
@@ -37510,6 +37786,16 @@ Escape Timer: %*]]
 			end,
 		})
 
+		Miscellaneous:AddToggle("SeatlessBlob", {
+			Text = "Seatless Blob",
+			Default = false,
+			Tooltip = "Spawns an anchored Blobman far from the map and forces you onto its seat. Off deletes the Blobman.",
+			Callback = function(seatlessBlob)
+				tbl8.SeatlessBlob = seatlessBlob
+				tbl12.SeatlessBlob(seatlessBlob)
+			end,
+		})
+
 		local LastGrabbedLabel = Miscellaneous:AddLabel("LastGrabbedLabel", { Text = "Last person who grabbed you: nobody", DoesWrap = true })
 
 		tbl12.UpdateLastGrabbedLabel = function()
@@ -37564,6 +37850,226 @@ Escape Timer: %*]]
 	end
 
 	do
+				tbl7.ToyIcons = {
+			Airhorn = "rbxassetid://107579979248431",
+			AnvilGray = "rbxassetid://126466644775974",
+			ArmChairBlue = "rbxassetid://132068547498927",
+			ArmChairBrownGray = "rbxassetid://104883378402525",
+			ArmChairDarkGray = "rbxassetid://85878832247013",
+			ArmChairLightBrownGray = "rbxassetid://98931057214354",
+			ArmChairPink = "rbxassetid://129183068986607",
+			ArmChairPurple = "rbxassetid://82361898784282",
+			ArmChairWhite = "rbxassetid://129680683599606",
+			BallBasketball = "rbxassetid://124117930176682",
+			BallMagicLight = "rbxassetid://118605054936122",
+			BallSnowball = "rbxassetid://88449309231889",
+			BathroomShower = "rbxassetid://99048947822396",
+			BathroomSink = "rbxassetid://90378551072011",
+			BedBlanketBlue = "rbxassetid://105965229183457",
+			BedFramedOrange = "rbxassetid://86642865294127",
+			BedFuton = "rbxassetid://82726747221736",
+			BellBig = "rbxassetid://105393225121492",
+			BellSmall = "rbxassetid://124526896113322",
+			BombBalloon = "rbxassetid://134919370925649",
+			BombDarkMatter = "rbxassetid://122617660735564",
+			BombMissile = "rbxassetid://76009942745580",
+			BookManyPages = "rbxassetid://88673479799318",
+			BookNormal = "rbxassetid://127408946686031",
+			Boombox = "rbxassetid://137954485112699",
+			BoxCrateWood = "rbxassetid://80919346750587",
+			BubbleBlower = "rbxassetid://119762657659713",
+			BucketPaint = "rbxassetid://99180094284761",
+			Campfire = "rbxassetid://133169306444035",
+			ChildrensChair = "rbxassetid://112086542791929",
+			ChildrensCouch = "rbxassetid://86562881731848",
+			ChildrensDesk = "rbxassetid://82267390873028",
+			ChildrensShelf = "rbxassetid://75298500733717",
+			ChildrensTable = "rbxassetid://103654349875916",
+			ChildrensTableBench = "rbxassetid://101206925459182",
+			ChildrensTableBenchSmall = "rbxassetid://109290938646624",
+			ClockAlarm = "rbxassetid://129989066967727",
+			ComputerLaptopOld = "rbxassetid://72732912481320",
+			CouchBlue = "rbxassetid://79021413551851",
+			CouchBrownGray = "rbxassetid://129461342795588",
+			CouchDarkGray = "rbxassetid://106228830901883",
+			CouchLightBrownGray = "rbxassetid://70920500914668",
+			CouchPink = "rbxassetid://120044790273241",
+			CouchPurple = "rbxassetid://133595197657222",
+			CouchWhite = "rbxassetid://78431539132427",
+			CounterCorner = "rbxassetid://140416601120965",
+			CounterSink = "rbxassetid://107762891660094",
+			CounterStraight = "rbxassetid://78601936595261",
+			CreatureBlobman = "rbxassetid://121397196237272",
+			CreatureRobot = "rbxassetid://74168393624840",
+			CupMugBrown = "rbxassetid://74168393624840",
+			CupMugWhite = "rbxassetid://107681115846393",
+			DiceBig = "rbxassetid://122524903338859",
+			DiceSmall = "rbxassetid://113969514934389",
+			DiscoColorBall = "rbxassetid://107625757213769",
+			DrawerLightBrown = "rbxassetid://133462559021288",
+			FactoryBench = "rbxassetid://114546648751469",
+			FactoryCabinet = "rbxassetid://84163109626502",
+			FactoryChair = "rbxassetid://80435912874799",
+			FactoryCouch = "rbxassetid://122329739130188",
+			FactoryDesk = "rbxassetid://118554986948890",
+			FactoryDeskMini = "rbxassetid://119037441744393",
+			FactoryLight = "rbxassetid://125636200595264",
+			FactoryShelf = "rbxassetid://115820022943397",
+			FactoryTable = "rbxassetid://75876218906958",
+			FanElectricLittle = "rbxassetid://90108211677798",
+			FanPaper = "rbxassetid://116635727167719",
+			FireExtinguisher = "rbxassetid://91853839841308",
+			FireworkMissile = "rbxassetid://78849954002785",
+			FireworkSmokeBomb = "rbxassetid://124635072743198",
+			FireworkSparkler = "rbxassetid://83705111570739",
+			FlagUnitedStatesOfAmerica = "rbxassetid://93773469650577",
+			FloatingIsland = "rbxassetid://73033709284703",
+			FlyingToyHelicopter = "rbxassetid://95910938782572",
+			FlyingToyPlane = "rbxassetid://113523115553442",
+			FlyingToyUfo = "rbxassetid://112405200357665",
+			FoodBanana = "rbxassetid://75484207768793",
+			FoodBread = "rbxassetid://73483588123877",
+			FoodBroccoli = "rbxassetid://97340085804476",
+			FoodCakePink = "rbxassetid://135967824239828",
+			FoodCoconut = "rbxassetid://133875991045577",
+			FoodDippyEgg = "rbxassetid://89197648899618",
+			FoodDonut = "rbxassetid://121685717166327",
+			FoodFrenchFries = "rbxassetid://94745609579445",
+			FoodHamburger = "rbxassetid://107005089698340",
+			FoodHotdog = "rbxassetid://106249136532377",
+			FoodHotSauce = "rbxassetid://75701766244279",
+			FoodMayonnaise = "rbxassetid://87917161433070",
+			FoodMeatStick = "rbxassetid://119912069009462",
+			FoodMushroomPoison = "rbxassetid://103335679226894",
+			FoodPizzaCheese = "rbxassetid://106931956314027",
+			FoodPizzaPepperoni = "rbxassetid://94216796644855",
+			FoodPlate = "rbxassetid://112601173057362",
+			FoodSodaCan = "rbxassetid://85081927222669",
+			FridgeBlack = "rbxassetid://115916316353598",
+			FutureAngularDesk = "rbxassetid://127576064429423",
+			GlassBoxGray = "rbxassetid://136822712648110",
+			HayBale = "rbxassetid://102119975965945",
+			InstrumentBrassBugle = "rbxassetid://87157563194460",
+			InstrumentBrassTrumpet = "rbxassetid://96100498305663",
+			InstrumentBrassVuvuzela = "rbxassetid://80041454248720",
+			InstrumentDrumBongos = "rbxassetid://121844247397293",
+			InstrumentDrumSnare = "rbxassetid://106012654158373",
+			InstrumentGuitarAcoustic = "rbxassetid://134044426735217",
+			InstrumentGuitarBanjo = "rbxassetid://116000546776316",
+			InstrumentGuitarLyre = "rbxassetid://95132812667755",
+			InstrumentGuitarUkulele = "rbxassetid://95555859846275",
+			InstrumentGuitarViolin = "rbxassetid://136796330128678",
+			InstrumentPianoKeyboard = "rbxassetid://134663165959498",
+			InstrumentPianoMelodica = "rbxassetid://74776435919630",
+			InstrumentVoiceMicrophone = "rbxassetid://122274381498776",
+			InstrumentWoodwindOcarina = "rbxassetid://111465927393012",
+			InstrumentWoodwindSaxophone = "rbxassetid://123311585597786",
+			JapaneseBanner = "rbxassetid://112490664208321",
+			JapaneseBench = "rbxassetid://93980511357131",
+			JapaneseChair = "rbxassetid://118772129534166",
+			JapaneseCouch = "rbxassetid://97110405609081",
+			JapaneseDeskMini = "rbxassetid://130755724672620",
+			JapaneseDresser = "rbxassetid://95642439867934",
+			JapaneseLantern = "rbxassetid://139317721043641",
+			JapaneseShelf = "rbxassetid://99485597908677",
+			JapaneseTable = "rbxassetid://127026183321800",
+			JukeboxBlue = "rbxassetid://83713580031554",
+			JukeboxOrange = "rbxassetid://111545561584542",
+			LadderLightBrown = "rbxassetid://97966038347264",
+			LightLampDeskLampBent = "rbxassetid://89095666007492",
+			LightLampGray = "rbxassetid://130734630675109",
+			MachineWasher = "rbxassetid://75443435213432",
+			MidiMaker = "rbxassetid://108312376733697",
+			MineralCrystalPink = "rbxassetid://119522351784315",
+			MineralDiamond = "rbxassetid://136035935234483",
+			MineralIngotGold = "rbxassetid://110212740053497",
+			MusicKeyboard = "rbxassetid://72644194087868",
+			NinjaKatana = "rbxassetid://139546965155982",
+			NinjaKunai = "rbxassetid://85197427890853",
+			NinjaShuriken = "rbxassetid://140368128539182",
+			NormalBench = "rbxassetid://127591369190788",
+			NormalCabinet = "rbxassetid://83201670785579",
+			NormalDesk = "rbxassetid://71818176782652",
+			NormalShelves = "rbxassetid://75543861449843",
+			NpcRobloxianMascot = "rbxassetid://110620433205661",
+			OvenBlack = "rbxassetid://100502553897109",
+			OvenDarkGray = "rbxassetid://101075889339124",
+			OvenLightGray = "rbxassetid://83948935663997",
+			OvenMicrowaveWhite = "rbxassetid://129241869862582",
+			OvenRusty = "rbxassetid://129799764358427",
+			PalletLightBrown = "rbxassetid://72414557626355",
+			PaperPlane = "rbxassetid://113132762458773",
+			PetSnowman = "rbxassetid://92441134480732",
+			PetTurkeyLeg = "rbxassetid://74742499565747",
+			PlantPottedBonsai = "rbxassetid://96409932109342",
+			PlantPottedCactus = "rbxassetid://139149256399502",
+			PlantPottedTree = "rbxassetid://123304544863401",
+			PlantPottedTreeChristmas = "rbxassetid://133714107862983",
+			PlayhouseGingerbread = "rbxassetid://119555799677412",
+			PoopPile = "rbxassetid://102977099237461",
+			PoopPileSparkle = "rbxassetid://121252324664942",
+			PresentBig = "rbxassetid://113649348845297",
+			PresentSmall = "rbxassetid://78717962541786",
+			RedGateGong = "rbxassetid://127278016850181",
+			RollerGrayPurple = "rbxassetid://124245971218921",
+			SantaSleigh = "rbxassetid://128218651198278",
+			Snowflake = "rbxassetid://86518573014060",
+			SoundWaveMaker = "rbxassetid://83717378849854",
+			SpookyBench = "rbxassetid://95515331319063",
+			SpookyCabinet = "rbxassetid://121764055215413",
+			SpookyCandle1 = "rbxassetid://72509555120397",
+			SpookyCandle3 = "rbxassetid://127697547588069",
+			SpookyCandle5 = "rbxassetid://115309255630161",
+			SpookyChair = "rbxassetid://85941698596443",
+			SpookyCouch = "rbxassetid://71977056669359",
+			SpookyDesk = "rbxassetid://130272947276246",
+			SpookyShelf = "rbxassetid://119098894560334",
+			SpookyStool = "rbxassetid://111645873817619",
+			SpookyTable = "rbxassetid://104134073831489",
+			SpotlightBlue = "rbxassetid://120432870083468",
+			SpotlightCyan = "rbxassetid://130824785856256",
+			SpotlightCyanBlue = "rbxassetid://96181969763605",
+			SpotlightCyanGreen = "rbxassetid://126435494311992",
+			SpotlightGreen = "rbxassetid://98926417249470",
+			SpotlightMagenta = "rbxassetid://104278297471458",
+			SpotlightMagentaBlue = "rbxassetid://125389470560542",
+			SpotlightMagentaRed = "rbxassetid://137442512414512",
+			SpotlightRed = "rbxassetid://119078238555806",
+			SpotlightWhite = "rbxassetid://140618026054972",
+			SpotlightYellow = "rbxassetid://77480599416160",
+			SpotlightYellowGreen = "rbxassetid://129234357249175",
+			SpotlightYellowRed = "rbxassetid://90089125887705",
+			SprayCanWD = "rbxassetid://100485480124279",
+			TableLunchTable = "rbxassetid://78577643655620",
+			TableSmallLabTable = "rbxassetid://115195269005477",
+			TableWoodFourLegsBrown = "rbxassetid://84631203567137",
+			TableWoodTwoLegs = "rbxassetid://95944741470314",
+			TeapotUtah = "rbxassetid://78915783416124",
+			TelevisionFlatscreen = "rbxassetid://119838057624085",
+			TelevisionGray = "rbxassetid://74939784483601",
+			TetracubeI = "rbxassetid://134728416847817",
+			TetracubeJ = "rbxassetid://118842811235853",
+			TetracubeL = "rbxassetid://94959126008120",
+			TetracubeO = "rbxassetid://112107092004738",
+			TetracubeS = "rbxassetid://136248615920748",
+			TetracubeT = "rbxassetid://121206247295289",
+			TetracubeZ = "rbxassetid://120500759347878",
+			ToiletGold = "rbxassetid://124657722722417",
+			ToiletWhite = "rbxassetid://84274307077241",
+			ToolCleaver = "rbxassetid://70617572473301",
+			ToolDiggingForkRusty = "rbxassetid://99651991375781",
+			ToolPencil = "rbxassetid://92908917595707",
+			ToolPickaxe = "rbxassetid://129936050231156",
+			ToyAnimalBear = "rbxassetid://93745595874341",
+			ToyAnimalDuck = "rbxassetid://85905667915895",
+			ToyAnimalFrog = "rbxassetid://75996601096553",
+			ToyAnimalTiger = "rbxassetid://133587213766592",
+			ToyAnimalUnicorn = "rbxassetid://118351222526333",
+			TractorGreen = "rbxassetid://117546726657182",
+			TractorOrange = "rbxassetid://134396833776942",
+			TractorRed = "rbxassetid://79904842122527",
+		}
+
 		local Config = tbl15.Invincibility:AddRightGroupbox("Config", "settings")
 
 		Config:AddSlider("AntiLagSens", {
@@ -37578,10 +38084,147 @@ Escape Timer: %*]]
 		})
 
 		Config:AddDropdown("ConfigCategory", {
-			Values = { "Auto Reset", "Anti Net-Owner", "Anti-Grab" },
-			Default = "Auto Reset",
+			Values = { "Anti-Grab", "Anti Net-Owner", "Auto Reset" },
+			Default = "Anti-Grab",
 			Multi = false,
 			Text = "Category",
+		})
+
+		local AGCat = Config:AddDependencyBox()
+		AGCat:SetupDependencies({ { options.ConfigCategory, "Anti-Grab" } })
+
+		AGCat:AddDropdown("AGTDropdown", {
+			Values = { "Normal", "No Ragdoll", "Anti-Kill", "Escapes Anything, but buggy" },
+			Default = 1,
+			Multi = false,
+			Text = "Anti-Grab Type",
+			Tooltip = "Type of default Anti-Grab",
+			Callback = function(agType)
+				tbl9.AGType = agType
+			end,
+		})
+
+		AGCat:AddToggle("AllowWhitelistedGrabs", {
+			Text = "Allow Whitelisted Grabs",
+			Default = false,
+			Tooltip = "Lets whitelisted players hold you. Only affects normal Anti-Grab.",
+			Callback = function(allowWhitelistedGrabs)
+				tbl8.AllowWhitelistedGrabs = allowWhitelistedGrabs
+			end,
+		})
+
+		AGCat:AddDivider("Gucci")
+
+		AGCat:AddDropdown("GTDropdown", {
+			Values = { "Blobman", "Tractor [Invisible]", "Train [Invisible]", "Sleigh [Invisible]" },
+			ValueImages = {
+				Blobman = tbl7.ToyIcons.CreatureBlobman,
+				["Tractor [Invisible]"] = tbl7.ToyIcons.TractorGreen,
+				["Sleigh [Invisible]"] = tbl7.ToyIcons.SantaSleigh,
+			},
+			Default = 1,
+			Multi = false,
+			Text = "Vehicle",
+			Tooltip = "What vehicle will you sit on during Gucci Anti Grab",
+			Callback = function(arg)
+				if arg == "Blobman" then
+					tbl9.GucciType = "CreatureBlobman"
+				elseif arg == "Tractor [Invisible]" then
+					tbl9.GucciType = "TractorGreen"
+				elseif arg == "Train [Invisible]" then
+					tbl9.GucciType = "Train"
+				elseif arg == "Sleigh [Invisible]" then
+					tbl9.GucciType = "SantaSleigh"
+				end
+			end,
+		})
+
+		AGCat:AddToggle("AllowSitting", {
+			Text = "Allow Sitting",
+			Default = false,
+			Tooltip = "Lets you sit on vehicles normally; if you get up/jump off while [GUCCI] Anti Grab is on, it reacquires a fresh one for you right away instead of leaving you without one.",
+			Callback = function(allowSitting)
+				tbl8.AllowSitting = allowSitting
+			end,
+		})
+
+		local ANOCat = Config:AddDependencyBox()
+		ANOCat:SetupDependencies({ { options.ConfigCategory, "Anti Net-Owner" } })
+
+		ANOCat:AddDropdown("AntiOwnerMethod", {
+			Values = { "Normal", "Silent", "Fast Grab & Drop" },
+			Default = "Normal",
+			Multi = false,
+			Text = "Method",
+			Tooltip = "Normal: the delay below, as set. Silent: only respawns the toy when it's actually gone (less visible toy churn). Fast Grab & Drop: ignores the delay and cycles as fast as possible.",
+			Callback = function(antiOwnerMethod)
+				tbl9.AntiOwnerMethod = antiOwnerMethod
+			end,
+		})
+
+		ANOCat:AddDropdown("AITDropdown", {
+			Values = {
+				"FoodHamburger",
+				"InstrumentDrumBongos",
+				"InstrumentBrassTrumpet",
+				"InstrumentBrassBugle",
+				"InstrumentVoiceMicrophone",
+				"InstrumentWoodwindOcarina",
+				"InstrumentGuitarUkulele",
+				"InstrumentGuitarLyre",
+				"InstrumentGuitarBanjo",
+				"InstrumentGuitarAcoustic",
+				"CupMugBrown",
+				"CupMugWhite",
+				"FoodBanana",
+				"FoodBread",
+				"FoodBroccoli",
+				"FoodCakePink",
+				"FoodCoconut",
+				"FoodDippyEgg",
+				"FoodDonut",
+				"FoodFrenchFries",
+				"FoodHotdog",
+				"FoodMayonnaise",
+				"FoodMeatStick",
+				"FoodMushroomPoison",
+				"FoodPizzaCheese",
+				"FoodPizzaPepperoni",
+				"FoodSodaCan",
+				"PoopPile",
+				"PoopPileSparkle",
+			},
+			ValueImages = tbl7.ToyIcons,
+			Default = 1,
+			Multi = false,
+			Text = "Toy",
+			Tooltip = "What interactable item will you use when doing anti-Net Owner",
+			Callback = function(antiInputType)
+				tbl9.AntiInputType = antiInputType
+			end,
+		})
+
+		ANOCat:AddSlider("AntiInpLagDel", {
+			Text = "Grab & Drop Delay",
+			Default = 0.05,
+			Min = 0,
+			Max = 0.3,
+			Suffix = " sec",
+			Rounding = 2,
+			Callback = function(inputLgDelay)
+				tbl9.InputLgDelay = inputLgDelay
+			end,
+		})
+
+		ANOCat:AddSlider("ItemTransAK", {
+			Text = "Item Transparency",
+			Default = tbl9.AILTransparency,
+			Min = 0,
+			Max = 1,
+			Rounding = 2,
+			Callback = function(ailTransparency)
+				tbl9.AILTransparency = ailTransparency
+			end,
 		})
 
 		local AutoResetCat = Config:AddDependencyBox()
@@ -37630,128 +38273,6 @@ Escape Timer: %*]]
 			Tooltip = "Kick flags (within the reset window) before Auto Leave kicks you from the server yourself",
 			Callback = function(flagsBeforeLeaving)
 				tbl9.FlagsBeforeLeaving = flagsBeforeLeaving
-			end,
-		})
-
-		local ANOCat = Config:AddDependencyBox()
-		ANOCat:SetupDependencies({ { options.ConfigCategory, "Anti Net-Owner" } })
-
-		ANOCat:AddDropdown("AITDropdown", {
-			Values = {
-				"FoodHamburger",
-				"InstrumentDrumBongos",
-				"InstrumentBrassTrumpet",
-				"InstrumentBrassBugle",
-				"InstrumentVoiceMicrophone",
-				"InstrumentWoodwindOcarina",
-				"InstrumentGuitarUkulele",
-				"InstrumentGuitarLyre",
-				"InstrumentGuitarBanjo",
-				"InstrumentGuitarAcoustic",
-				"CupMugBrown",
-				"CupMugWhite",
-				"FoodBanana",
-				"FoodBread",
-				"FoodBroccoli",
-				"FoodCakePink",
-				"FoodCoconut",
-				"FoodDippyEgg",
-				"FoodDonut",
-				"FoodFrenchFries",
-				"FoodHotdog",
-				"FoodMayonnaise",
-				"FoodMeatStick",
-				"FoodMushroomPoison",
-				"FoodPizzaCheese",
-				"FoodPizzaPepperoni",
-				"FoodSodaCan",
-				"PoopPile",
-				"PoopPileSparkle",
-			},
-			Default = 1,
-			Multi = false,
-			Text = "Toy",
-			Tooltip = "What interactable item will you use when doing anti-Net Owner",
-			Callback = function(antiInputType)
-				tbl9.AntiInputType = antiInputType
-			end,
-		})
-
-		ANOCat:AddSlider("AntiInpLagDel", {
-			Text = "Grab & Drop Delay",
-			Default = 0.05,
-			Min = 0,
-			Max = 0.3,
-			Suffix = " sec",
-			Rounding = 2,
-			Callback = function(inputLgDelay)
-				tbl9.InputLgDelay = inputLgDelay
-			end,
-		})
-
-		ANOCat:AddLabel("Below 0.05 can cause high ping")
-
-		ANOCat:AddSlider("ItemTransAK", {
-			Text = "Item Transparency",
-			Default = tbl9.AILTransparency,
-			Min = 0,
-			Max = 1,
-			Rounding = 2,
-			Callback = function(ailTransparency)
-				tbl9.AILTransparency = ailTransparency
-			end,
-		})
-
-		local AGCat = Config:AddDependencyBox()
-		AGCat:SetupDependencies({ { options.ConfigCategory, "Anti-Grab" } })
-
-		AGCat:AddDropdown("AGTDropdown", {
-			Values = { "Normal", "No Ragdoll", "Anti-Kill", "Escapes Anything, but buggy" },
-			Default = 1,
-			Multi = false,
-			Text = "Anti-Grab Type",
-			Tooltip = "Type of default Anti-Grab",
-			Callback = function(agType)
-				tbl9.AGType = agType
-			end,
-		})
-
-		AGCat:AddToggle("AllowWhitelistedGrabs", {
-			Text = "Allow Whitelisted Grabs",
-			Default = false,
-			Tooltip = "Lets whitelisted players hold you. Only affects normal Anti-Grab.",
-			Callback = function(allowWhitelistedGrabs)
-				tbl8.AllowWhitelistedGrabs = allowWhitelistedGrabs
-			end,
-		})
-
-		AGCat:AddDivider("Gucci")
-
-		AGCat:AddDropdown("GTDropdown", {
-			Values = { "Blobman", "Tractor [Invisible]", "Train [Invisible]", "Sleigh [Invisible]" },
-			Default = 1,
-			Multi = false,
-			Text = "Vehicle",
-			Tooltip = "What vehicle will you sit on during Gucci Anti Grab",
-			Callback = function(arg)
-				if arg == "Blobman" then
-					tbl9.GucciType = "CreatureBlobman"
-				elseif arg == "Tractor [Invisible]" then
-					tbl9.GucciType = "TractorGreen"
-				elseif arg == "Train [Invisible]" then
-					tbl9.GucciType = "Train"
-				elseif arg == "Sleigh [Invisible]" then
-					tbl9.GucciType = "SantaSleigh"
-				end
-			end,
-		})
-
-		AGCat:AddToggle("AllowSitting", {
-			Text = "Allow Sitting",
-			Default = false,
-			Tooltip = "Lets other players sit on your [GUCCI] vehicle instead of it being reserved to you.",
-			Callback = function(allowSitting)
-				tbl8.AllowSitting = allowSitting
 			end,
 		})
 
@@ -37891,16 +38412,6 @@ Escape Timer: %*]]
 			end,
 		})
 
-		v21:AddDropdown("RagdollToy", {
-			Values = { "PalletLightBrown", "YouDecoy", "Boombox" },
-			Default = "PalletLightBrown",
-			Multi = false,
-			Text = "Ragdoll Toy",
-			Tooltip = "What toy Loop Ragdoll spawns to smack him. Only toys with the same SoundPart/Main shape as the Pallet actually work here - an incompatible one just fails quietly without ragdolling him.",
-			Callback = function(ragdollToy)
-				tbl9.RagdollToy = ragdollToy
-			end,
-		})
 
 		v21:AddToggle("AntiKickRemoverNK", {
 			Text = "Remove Anti-Kick",
@@ -38360,6 +38871,7 @@ Escape Timer: %*]]
 
 		v21:AddDropdown("FlingMethod", {
 			Values = { "PalletLightBrown", "YouDecoy" },
+			ValueImages = tbl7.ToyIcons,
 			Default = "PalletLightBrown",
 			Multi = false,
 			Text = "Fling Method",
@@ -43473,14 +43985,6 @@ Escape Timer: %*]]
 			end,
 		})
 
-		Network:AddToggle("PCLDTeleport", {
-			Text = "PCLD Teleport",
-			Default = false,
-			Tooltip = "When claiming from far away, welds only your PCLD to the target instead of physically teleporting your whole body there every Heartbeat (hidden by a camera snap-back). Your real body never moves, on your screen or the server's. Falls back to the normal method automatically until your own PCLD is found.",
-			Callback = function(pcldTeleport)
-				tbl8.PCLDTeleport = pcldTeleport
-			end,
-		})
 	end
 
 	do
