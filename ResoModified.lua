@@ -19285,6 +19285,17 @@ do
 							flag12 = true
 						end
 
+						-- PCLD TELEPORT: instead of physically teleporting our whole body (root + head) near the target every
+						-- Heartbeat and hiding it with a RenderStep snap-back, weld ONLY our PCLD (the part the server actually
+						-- reads our position from) to the claim point - our real body never moves, on our screen or the server's.
+						-- Falls back to the normal camera-fake automatically if our PCLD hasn't been found yet.
+						local myPcld = tbl8.PCLDTeleport and flag12 and tbl7.PCLD[localPlayer]
+						local pcldSaved = nil
+
+						if myPcld then
+							flag12 = false -- skip the root/head camera-fake entirely; the PCLD is doing the job instead
+						end
+
 						local flag13 = arg.Name == "HumanoidRootPart" or arg.Name == "Torso"
 						local v27 = nil
 
@@ -19345,32 +19356,40 @@ do
 						local ok, result = pcall(function()
 							if flag12 then
 								fn21()
+							elseif myPcld then
+								pcldSaved = myPcld.CFrame
 							end
 
 							arg2 = arg2 or 0.65
 							local now3 = tick()
 
 							while not flag11 and arg.Parent and not tbl12.IsPartOwner(arg) and v26.Health ~= 0 and v25.Parent and (not arg3 or arg3()) and tick() - now3 < arg2 do
+								local claimCF = nil
+
 								if flag12 then
 									cframe3 = tbl12.PredictCFrame(arg) - Vector3.new(0, 22, 0)
+									claimCF = cframe3
+								elseif myPcld then
+									claimCF = tbl12.PredictCFrame(arg) - Vector3.new(0, 22, 0)
+
+									if myPcld.Parent then
+										pcall(function()
+											myPcld.CFrame = claimCF
+										end)
+									end
 								end
 
 								RunService.Heartbeat:Wait()
-								local grab = tbl12.Grab
-								local v28
-
-								if flag12 then
-									v28 = cframe3
-								else
-									v28 = nil
-								end
-
-								grab(arg, v28)
+								tbl12.Grab(arg, claimCF)
 							end
 						end)
 
 						if flag12 then
 							pcall(fn22)
+						elseif myPcld and pcldSaved and myPcld.Parent then
+							pcall(function()
+								myPcld.CFrame = pcldSaved
+							end)
 						end
 
 						if v27 then
@@ -20650,7 +20669,7 @@ end
 
 					if humanoid and humanoid.Value == false then
 						tbl7.States.Ragdolling = true
-						local ragdollRSC = v17:FindFirstChild("RagdollRSC") or tbl12.SpawnToy("PalletLightBrown")
+						local ragdollRSC = v17:FindFirstChild("RagdollRSC") or tbl12.SpawnToy(tbl9.RagdollToy or "PalletLightBrown")
 						local soundPart = ragdollRSC and ragdollRSC:WaitForChild("SoundPart", 0.5)
 						local main = soundPart and ragdollRSC:WaitForChild("Main", 0.5)
 						if not main or not tbl12.SNO(soundPart) then
@@ -29711,7 +29730,7 @@ end
 							tbl12.DestroyObject(v22, v23)
 							tbl16[v22] = true
 
-							task.delay(1, function()
+							task.delay(0.7, function() -- was 1s; SNO already spends up to ~0.65s trying, so a failed try now retries almost immediately
 								tbl16[v22] = nil
 							end)
 						end
@@ -29741,7 +29760,7 @@ end
 					if leftArm and v25 and v25.Health ~= 0 then
 						for _, v26 in pairs(leftArm:GetConnectedParts()) do
 							if v26.Name == "HoldPart" and not v26:IsDescendantOf(v17) then
-								tbl12.BreakHoldable(v26.Parent, 1, true)
+								tbl12.BreakHoldable(v26.Parent, tonumber(tbl9.DestroyFoodTimeout) or 1, tbl9.DestroyFoodMethod ~= "Breaking")
 							end
 						end
 					end
@@ -32464,7 +32483,7 @@ end
 
 		do
 			local function fn21()
-				return tbl8.PCLDESP or tbl8.AntiKick
+				return tbl8.PCLDESP or tbl8.AntiKick or tbl8.PCLDTeleport
 			end
 
 			task.spawn(function()
@@ -34333,7 +34352,7 @@ Escape Timer: %*]]
 					if arg == "Flying" then
 						local now3 = tick()
 
-						if now3 - n36 > 1 then
+						if now3 - n36 > (tonumber(tbl9.FlagResetTimer) or 1) then
 							n36 = now3
 							tbl9.KickFlags = 1
 						else
@@ -34341,17 +34360,20 @@ Escape Timer: %*]]
 						end
 
 						if tbl8.AutoReset then
-							if tbl9.KickFlags >= 4 and tbl8.AutoLeave then
+							if tbl9.KickFlags >= (tonumber(tbl9.FlagsBeforeLeaving) or 4) and tbl8.AutoLeave then
 								return localPlayer:Kick("Resonance (Auto Reset)\nAvoided Kick")
 							end
-							local v22, v23, v24 = tbl12.Char()
 
-							if v24 then
-								v24:ChangeState(Enum.HumanoidStateType.Running)
-								v24:ChangeState(Enum.HumanoidStateType.Dead)
+							if tbl9.KickFlags >= (tonumber(tbl9.FlagsBeforeReset) or 1) then
+								local v22, v23, v24 = tbl12.Char()
 
-								if tbl9.KickFlags == 1 then
-									fn18("Reset due to kick flag", "Auto Reset")
+								if v24 then
+									v24:ChangeState(Enum.HumanoidStateType.Running)
+									v24:ChangeState(Enum.HumanoidStateType.Dead)
+
+									if tbl9.KickFlags == (tonumber(tbl9.FlagsBeforeReset) or 1) then
+										fn18("Reset due to kick flag", "Auto Reset")
+									end
 								end
 							end
 						end
@@ -35438,7 +35460,6 @@ Escape Timer: %*]]
 				end
 
 				local root = st.root2
-				st.armedAt = st.armedAt or os.clock()
 
 				if st.ekiOn and st.root == root then
 					if tbl12.IsNetworkOwner(root) then
@@ -35460,7 +35481,8 @@ Escape Timer: %*]]
 					return
 				end
 
-				if os.clock() - st.armedAt >= (tonumber(tbl9.EKIDelay) or 0.4) and tbl12.IsNetworkOwner(root) then
+				-- EKI Delay removed: the instant the engine says we simulate his root, claim the PhysicsRepRootPart, no wait.
+				if tbl12.IsNetworkOwner(root) then
 					if fn21(root, root) then
 						st.ekiOn, st.root, st.checkAt = true, root, os.clock()
 					end
@@ -35618,7 +35640,7 @@ Escape Timer: %*]]
 												tbl12.Grab(v27)
 											end
 
-											if now2 - (st.lastRel or 0) >= nkBase * 1.2 then
+											if now2 - (st.lastRel or 0) >= nkBase * 1.6 then -- destroyline widened from 1.2x (it was firing a lot more than setowner in practice)
 												st.lastRel = now2
 												tbl12.RNO(v27)
 											end
@@ -35636,7 +35658,9 @@ Escape Timer: %*]]
 										elseif tbl12.SNO(v27) then
 											st.alphaFired = false
 											tbl12.Teleport(v27, v29)
-											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.004 or 0.007
+											-- the weld/claim phase (far away, teleport + setowner): faster base than the in-range phase, since
+											-- this is purely about getting ownership established as quickly as possible
+											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.0025 or 0.0045
 											local nkPingLv2 = tbl12.PingLevel()
 
 											if nkPingLv2 >= 2 then
@@ -35652,7 +35676,7 @@ Escape Timer: %*]]
 												tbl12.Grab(v27)
 											end
 
-											if now3 - (st.lastRel or 0) >= nkBase2 * 1.2 then
+											if now3 - (st.lastRel or 0) >= nkBase2 * 1.6 then
 												st.lastRel = now3
 												tbl12.RNO(v27)
 											end
@@ -37553,83 +37577,66 @@ Escape Timer: %*]]
 			end,
 		})
 
-		Config:AddDivider("Auto Reset")
+		Config:AddDropdown("ConfigCategory", {
+			Values = { "Auto Reset", "Anti Net-Owner", "Anti-Grab" },
+			Default = "Auto Reset",
+			Multi = false,
+			Text = "Category",
+		})
 
-		Config:AddToggle("AutoLeave", {
+		local AutoResetCat = Config:AddDependencyBox()
+		AutoResetCat:SetupDependencies({ { options.ConfigCategory, "Auto Reset" } })
+
+		AutoResetCat:AddToggle("AutoLeave", {
 			Text = "Auto Leave",
 			Default = true,
-			Tooltip = "Leaves after four detected kick flags instead of continuing to reset",
+			Tooltip = "Leaves the server once Flags Before Leaving is reached, instead of continuing to reset",
 			Callback = function(autoLeave)
 				tbl8.AutoLeave = autoLeave
 			end,
 		})
 
-		Config:AddDivider("Anti-Grab / Gucci")
-
-		Config:AddDropdown("AGConfigCategory", {
-			Values = { "Anti-Grab", "Gucci" },
-			Default = "Anti-Grab",
-			Multi = false,
-			Text = "Category",
-		})
-
-		local AGCat = Config:AddDependencyBox()
-		AGCat:SetupDependencies({ { options.AGConfigCategory, "Anti-Grab" } })
-
-		AGCat:AddDropdown("AGTDropdown", {
-			Values = { "Normal", "No Ragdoll", "Anti-Kill", "Escapes Anything, but buggy" },
+		AutoResetCat:AddSlider("FlagsBeforeReset", {
+			Text = "Flags Before Reset",
 			Default = 1,
-			Multi = false,
-			Text = "Anti-Grab Type",
-			Tooltip = "Type of default Anti-Grab",
-			Callback = function(agType)
-				tbl9.AGType = agType
+			Min = 1,
+			Max = 4,
+			Rounding = 0,
+			Tooltip = "How many kick flags in the reset window before the character is reset (ChangeState Dead)",
+			Callback = function(flagsBeforeReset)
+				tbl9.FlagsBeforeReset = flagsBeforeReset
 			end,
 		})
 
-		AGCat:AddToggle("AllowWhitelistedGrabs", {
-			Text = "Allow Whitelisted Grabs",
-			Default = false,
-			Tooltip = "Lets whitelisted players hold you. Only affects normal Anti-Grab.",
-			Callback = function(allowWhitelistedGrabs)
-				tbl8.AllowWhitelistedGrabs = allowWhitelistedGrabs
+		AutoResetCat:AddSlider("FlagResetTimer", {
+			Text = "Flag Reset Timer",
+			Default = 1.2,
+			Min = 0.5,
+			Max = 3,
+			Suffix = " sec",
+			Rounding = 1,
+			Tooltip = "The window a kick flag counts within before the flag counter starts over at 1",
+			Callback = function(flagResetTimer)
+				tbl9.FlagResetTimer = flagResetTimer
 			end,
 		})
 
-		local GucciCat = Config:AddDependencyBox()
-		GucciCat:SetupDependencies({ { options.AGConfigCategory, "Gucci" } })
-
-		GucciCat:AddDropdown("GTDropdown", {
-			Values = { "Blobman", "Tractor [Invisible]", "Train [Invisible]", "Sleigh [Invisible]" },
-			Default = 1,
-			Multi = false,
-			Text = "Vehicle",
-			Tooltip = "What vehicle will you sit on during Gucci Anti Grab",
-			Callback = function(arg)
-				if arg == "Blobman" then
-					tbl9.GucciType = "CreatureBlobman"
-				elseif arg == "Tractor [Invisible]" then
-					tbl9.GucciType = "TractorGreen"
-				elseif arg == "Train [Invisible]" then
-					tbl9.GucciType = "Train"
-				elseif arg == "Sleigh [Invisible]" then
-					tbl9.GucciType = "SantaSleigh"
-				end
+		AutoResetCat:AddSlider("FlagsBeforeLeaving", {
+			Text = "Flags Before Leaving",
+			Default = 4,
+			Min = 1,
+			Max = 10,
+			Rounding = 0,
+			Tooltip = "Kick flags (within the reset window) before Auto Leave kicks you from the server yourself",
+			Callback = function(flagsBeforeLeaving)
+				tbl9.FlagsBeforeLeaving = flagsBeforeLeaving
 			end,
 		})
 
-		GucciCat:AddToggle("AllowSitting", {
-			Text = "Allow Sitting",
-			Default = false,
-			Tooltip = "Lets other players sit on your [GUCCI] vehicle instead of it being reserved to you.",
-			Callback = function(allowSitting)
-				tbl8.AllowSitting = allowSitting
-			end,
-		})
+		local ANOCat = Config:AddDependencyBox()
+		ANOCat:SetupDependencies({ { options.ConfigCategory, "Anti Net-Owner" } })
 
-		Config:AddDivider("Anti Net-Owner")
-
-		Config:AddDropdown("AITDropdown", {
+		ANOCat:AddDropdown("AITDropdown", {
 			Values = {
 				"FoodHamburger",
 				"InstrumentDrumBongos",
@@ -37663,14 +37670,14 @@ Escape Timer: %*]]
 			},
 			Default = 1,
 			Multi = false,
-			Text = "Type",
+			Text = "Toy",
 			Tooltip = "What interactable item will you use when doing anti-Net Owner",
 			Callback = function(antiInputType)
 				tbl9.AntiInputType = antiInputType
 			end,
 		})
 
-		Config:AddSlider("AntiInpLagDel", {
+		ANOCat:AddSlider("AntiInpLagDel", {
 			Text = "Grab & Drop Delay",
 			Default = 0.05,
 			Min = 0,
@@ -37682,9 +37689,9 @@ Escape Timer: %*]]
 			end,
 		})
 
-		Config:AddLabel("Below 0.05 can cause high ping")
+		ANOCat:AddLabel("Below 0.05 can cause high ping")
 
-		Config:AddSlider("ItemTransAK", {
+		ANOCat:AddSlider("ItemTransAK", {
 			Text = "Item Transparency",
 			Default = tbl9.AILTransparency,
 			Min = 0,
@@ -37692,6 +37699,59 @@ Escape Timer: %*]]
 			Rounding = 2,
 			Callback = function(ailTransparency)
 				tbl9.AILTransparency = ailTransparency
+			end,
+		})
+
+		local AGCat = Config:AddDependencyBox()
+		AGCat:SetupDependencies({ { options.ConfigCategory, "Anti-Grab" } })
+
+		AGCat:AddDropdown("AGTDropdown", {
+			Values = { "Normal", "No Ragdoll", "Anti-Kill", "Escapes Anything, but buggy" },
+			Default = 1,
+			Multi = false,
+			Text = "Anti-Grab Type",
+			Tooltip = "Type of default Anti-Grab",
+			Callback = function(agType)
+				tbl9.AGType = agType
+			end,
+		})
+
+		AGCat:AddToggle("AllowWhitelistedGrabs", {
+			Text = "Allow Whitelisted Grabs",
+			Default = false,
+			Tooltip = "Lets whitelisted players hold you. Only affects normal Anti-Grab.",
+			Callback = function(allowWhitelistedGrabs)
+				tbl8.AllowWhitelistedGrabs = allowWhitelistedGrabs
+			end,
+		})
+
+		AGCat:AddDivider("Gucci")
+
+		AGCat:AddDropdown("GTDropdown", {
+			Values = { "Blobman", "Tractor [Invisible]", "Train [Invisible]", "Sleigh [Invisible]" },
+			Default = 1,
+			Multi = false,
+			Text = "Vehicle",
+			Tooltip = "What vehicle will you sit on during Gucci Anti Grab",
+			Callback = function(arg)
+				if arg == "Blobman" then
+					tbl9.GucciType = "CreatureBlobman"
+				elseif arg == "Tractor [Invisible]" then
+					tbl9.GucciType = "TractorGreen"
+				elseif arg == "Train [Invisible]" then
+					tbl9.GucciType = "Train"
+				elseif arg == "Sleigh [Invisible]" then
+					tbl9.GucciType = "SantaSleigh"
+				end
+			end,
+		})
+
+		AGCat:AddToggle("AllowSitting", {
+			Text = "Allow Sitting",
+			Default = false,
+			Tooltip = "Lets other players sit on your [GUCCI] vehicle instead of it being reserved to you.",
+			Callback = function(allowSitting)
+				tbl8.AllowSitting = allowSitting
 			end,
 		})
 
@@ -37802,16 +37862,7 @@ Escape Timer: %*]]
 		local v20 = tbl15.Target:AddRightGroupbox("Method Settings", "sliders-horizontal")
 
 		v20:AddDropdown("SettingsFor", {
-			Values = {
-				"Kick",
-				"Void",
-				"Kill",
-				"Bring",
-				"Destroy Food",
-				"Remove Gucci",
-				"Remove Invisibility",
-				"Delete Seatables",
-			},
+			Values = { "Kick", "Destroy Food", "Remove Gucci" }, -- only these three have a settings panel below
 			Multi = false,
 			AllowNull = true,
 			Default = "Kick",
@@ -37840,6 +37891,17 @@ Escape Timer: %*]]
 			end,
 		})
 
+		v21:AddDropdown("RagdollToy", {
+			Values = { "PalletLightBrown", "YouDecoy", "Boombox" },
+			Default = "PalletLightBrown",
+			Multi = false,
+			Text = "Ragdoll Toy",
+			Tooltip = "What toy Loop Ragdoll spawns to smack him. Only toys with the same SoundPart/Main shape as the Pallet actually work here - an incompatible one just fails quietly without ragdolling him.",
+			Callback = function(ragdollToy)
+				tbl9.RagdollToy = ragdollToy
+			end,
+		})
+
 		v21:AddToggle("AntiKickRemoverNK", {
 			Text = "Remove Anti-Kick",
 			Default = true,
@@ -37857,20 +37919,6 @@ Escape Timer: %*]]
 			Disabled = typeof(sethiddenproperty) ~= "function",
 			Callback = function(eki)
 				tbl8.EKI = eki
-			end,
-		})
-
-		v21:AddSlider("EKIDelaySlider", {
-			Text = "EKI Delay",
-			Default = 0.4,
-			Min = 0.1,
-			Max = 1,
-			Rounding = 2,
-			Compact = true,
-			Suffix = "s",
-			Tooltip = "Seconds you must own him before EKI is armed (lower = faster, but needs steadier ownership)",
-			Callback = function(ekiDelay)
-				tbl9.EKIDelay = ekiDelay
 			end,
 		})
 
@@ -37908,6 +37956,33 @@ Escape Timer: %*]]
 			Text = "Kick Server Method",
 			Callback = function(kickServerMethod)
 				tbl9.KickServerMethod = kickServerMethod
+			end,
+		})
+
+		local v23 = v20:AddDependencyBox()
+		v23:SetupDependencies({ { options.SettingsFor, "Destroy Food" } })
+		v23:AddDivider("Destroy Food Settings")
+
+		v23:AddDropdown("DestroyFoodMethod", {
+			Values = { "Breaking", "Deletion" },
+			Default = "Deletion",
+			Multi = false,
+			Text = "Method",
+			Tooltip = "Breaking waits for him to actually let go (up to the timeout). Deletion forces it off him instantly.",
+			Callback = function(destroyFoodMethod)
+				tbl9.DestroyFoodMethod = destroyFoodMethod
+			end,
+		})
+
+		v23:AddSlider("DestroyFoodTimeout", {
+			Text = "Timeout",
+			Default = 1,
+			Min = 0.2,
+			Max = 3,
+			Suffix = " sec",
+			Rounding = 1,
+			Callback = function(destroyFoodTimeout)
+				tbl9.DestroyFoodTimeout = destroyFoodTimeout
 			end,
 		})
 
@@ -43395,6 +43470,15 @@ Escape Timer: %*]]
 			Tooltip = "Changes the position of the second argument to use direct part position instead of your head's LookAt CFrame. This can either help or just reduce your grab distance",
 			Callback = function(directGrab)
 				tbl8.DirectGrab = directGrab
+			end,
+		})
+
+		Network:AddToggle("PCLDTeleport", {
+			Text = "PCLD Teleport",
+			Default = false,
+			Tooltip = "When claiming from far away, welds only your PCLD to the target instead of physically teleporting your whole body there every Heartbeat (hidden by a camera snap-back). Your real body never moves, on your screen or the server's. Falls back to the normal method automatically until your own PCLD is found.",
+			Callback = function(pcldTeleport)
+				tbl8.PCLDTeleport = pcldTeleport
 			end,
 		})
 	end
