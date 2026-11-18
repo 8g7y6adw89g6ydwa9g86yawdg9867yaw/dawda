@@ -19377,6 +19377,9 @@ do
 									v28 = nil
 								end
 
+								-- MORE SETOWNERS WHILE CHASING: one SetNetworkOwner per heartbeat wasn't enough to
+								-- win it off a moving/contested target - burst 2 per frame instead of 1.
+								grab(arg, v28)
 								grab(arg, v28)
 							end
 						end)
@@ -30734,6 +30737,11 @@ end
 				desyncWasOn = tbl8.Desync
 				tbl12.SetDesync(true)
 
+				-- also keep his own body from desyncing/flailing on his screen while we chase him around
+				if sethiddenproperty then
+					pcall(sethiddenproperty, v27, "NetworkIsSleeping", true)
+				end
+
 				connection = RunService.Heartbeat:Connect(function()
 					v24.CFrame = cframe2
 					if head then
@@ -30764,6 +30772,10 @@ end
 					v24.CFrame = cframe
 				end
 				tbl12.ReturnPCLD()
+
+				if sethiddenproperty then
+					pcall(sethiddenproperty, v27, "NetworkIsSleeping", false)
+				end
 			end
 
 			if tbl12.GetMagnitude(workspace.SpawnLocation, v27) < 15000 then
@@ -30787,9 +30799,10 @@ end
 								cframe2 = v29 - Vector3.new(0, 15, 0)
 							end
 
-							task.wait(0.011111111111111112)
+							-- -0.0004s on both waits to send these a little more often
+							task.wait(0.010711111111111112)
 							v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
-							task.wait(0.011111111111111112)
+							task.wait(0.010711111111111112)
 							v22.CreatureRelease:FireServer(v22.RightWeld)
 							continue
 						end
@@ -30893,6 +30906,7 @@ end
 			v22.CreatureGrab:FireServer(nil, v24, v22.RightWeld)
 
 			local ekiClaimed = {}
+			local sleepSet = {}
 
 			local function fn21()
 				if v22.RightWeld.Parent then
@@ -30907,11 +30921,17 @@ end
 					end
 				end
 
-				-- always hand back any PCLD claimed below while they were held in place
+				-- always hand back any PCLD claimed below, and let their body stop being "asleep"
 				if sethiddenproperty then
 					for _, v26 in ipairs(tbl16) do
-						if v26.Root.Parent and ekiClaimed[v26.Root] then
-							pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", nil)
+						if v26.Root.Parent then
+							if ekiClaimed[v26.Root] then
+								pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", nil)
+							end
+
+							if sleepSet[v26.Root] then
+								pcall(sethiddenproperty, v26.Root, "NetworkIsSleeping", false)
+							end
 						end
 					end
 				end
@@ -30924,6 +30944,12 @@ end
 					if v26.Root.Parent then
 						v26.Root.CFrame = v26.CFrame
 						tbl12.ResetVelocity(v26.Root)
+
+						-- IMPROVE THE HOLD + stop his own body desyncing/flailing on his screen while we run
+						-- around: same NetworkIsSleeping trick used in every other kick, always released above.
+						if sethiddenproperty and not sleepSet[v26.Root] then
+							sleepSet[v26.Root] = pcall(sethiddenproperty, v26.Root, "NetworkIsSleeping", true)
+						end
 
 						-- EKI: also claim the target's own PCLD while he's held in place here, same technique
 						-- used elsewhere, so the server stops fighting the pin above.
@@ -31266,6 +31292,12 @@ end
 				task.wait(0.06)
 				rootAttachment.Parent = v25
 
+				-- IMPROVE THE HOLD + stop his own body desyncing/flailing on his screen while we run around:
+				-- same NetworkIsSleeping trick used in every other kick. Released right after the loop ends.
+				if sethiddenproperty then
+					pcall(sethiddenproperty, v27, "NetworkIsSleeping", true)
+				end
+
 				-- HIDE WHILE LOOPING: local-only (only we stop seeing it) - the Blobman isn't anything we need
 				-- to look at while a Kick loop is running on it.
 				local blobTCache = {}
@@ -31319,6 +31351,10 @@ end
 
 						task.wait()
 					end
+				end
+
+				if sethiddenproperty then
+					pcall(sethiddenproperty, v27, "NetworkIsSleeping", false)
 				end
 
 				for descendant, transparency in pairs(blobTCache) do
@@ -35881,6 +35917,11 @@ Escape Timer: %*]]
 
 					-- always hand the PCLD back (not only while we still own him)
 					fn21(v23, nil)
+
+					-- and always let his own body go back to normal replication
+					if sethiddenproperty then
+						pcall(sethiddenproperty, v23, "NetworkIsSleeping", false)
+					end
 				end
 
 				if v22 then
@@ -36072,10 +36113,19 @@ Escape Timer: %*]]
 												end
 											end
 
+											-- IMPROVE THE HOLD: tell the engine his own root is "asleep" network-wise while we hold him, so the
+											-- server stops re-syncing/correcting it off our own local BodyPosition/BodyGyro hold just because we're
+											-- moving around - this is also what stops HIS OWN client seeing his body desync/flail as we move, and
+											-- it's always released in fn22 the moment he's no longer tracked, so his PCLD never stays stuck.
+											if sethiddenproperty and not st.sleepSet then
+												st.sleepSet = pcall(sethiddenproperty, v27, "NetworkIsSleeping", true)
+											end
+
 											-- SETOWNER 1.2x FASTER THAN DESTROYLINE: both now fire on their own clock (not a single delayed RNO or an
 											-- every-frame Grab), with the destroyline interval always 1.2x the setowner interval, in real seconds so the
-											-- ratio holds regardless of fps. "Faster but worse" just uses a smaller base (more remotes/sec, same 1.2x ratio).
-											local nkBase = (tbl9.NKDelayMode == "Faster but worse") and 0.008 or 0.012
+											-- ratio holds regardless of fps. "Faster but worse" just uses a smaller base (more remotes/sec, same 1.2x
+											-- ratio); -0.0004s on both bases to send setowners a little more often, not less.
+											local nkBase = (tbl9.NKDelayMode == "Faster but worse") and 0.0076 or 0.0116
 											local nkPingLv = tbl12.PingLevel()
 
 											if nkPingLv >= 2 then
@@ -36112,8 +36162,8 @@ Escape Timer: %*]]
 											st.alphaFired = false
 											tbl12.Teleport(v27, v29)
 											-- the weld/claim phase (far away, teleport + setowner): faster base than the in-range phase, since
-											-- this is purely about getting ownership established as quickly as possible
-											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.005 or 0.008
+											-- this is purely about getting ownership established as quickly as possible; -0.0004s, same as above
+											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.0046 or 0.0076
 											local nkPingLv2 = tbl12.PingLevel()
 
 											if nkPingLv2 >= 2 then
