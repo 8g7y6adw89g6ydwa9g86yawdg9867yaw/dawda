@@ -25949,23 +25949,21 @@ end
 						end
 					end
 
-					-- SEATLESS BLOB, in order: (1) spawn the Blobman directly at the fixed position - SpawnToy is told
-					-- the exact CFrame to use (n38) and the server never checks it against our own position ("no
-					-- checks"), so there is no need to move our own body there first, (2) sit on it (the SeatWeld pulls
-					-- our character to the seat on its own, same as sitting on any far-away seat), (3) jump off, (4) run
-					-- the kill/ragdoll/spam-sit code (ported from Inicio()), (5) only once we're really seated: pin the
-					-- model exactly back onto its spot and anchor the VehicleSeat ("HRP") - re-asserted a few times
-					-- since physics this far from the origin (Y = 700,000,000) loses float precision and can drift a
-					-- little on its own even while anchored. If the blob gets deleted the whole sequence re-runs.
-					--
-					-- Once seated, Blobman features (Kick/Bring/Kill/Lock/Follow/Remove Gucci/loops) work on it exactly
-					-- like a normal Blobman: tbl14.Grab/tbl14.Release already have their own "target is far away" path
-					-- (teleport our character next to the target under the camera-fake, fire the remote, teleport back)
-					-- for anything past 40 studs, and that path only cares about the distance between us and the
-					-- TARGET, never about where the Blobman model itself is sitting - so the blob can just stay parked
-					-- and anchored the whole time. (An earlier version of this dragged the blob to our character for
-					-- every Blobman call instead - that fought the camera-fake teleport and was the actual cause of it
-					-- "needing to move" and a lot of the chase/teleport bugs; removed.)
+					-- SEATLESS BLOB, in order: (1) weld our own body to the fixed spot - direct CFrame glide with
+					-- velocity zeroed, hidden behind the real Position Desync feature, same technique used
+					-- everywhere else ("make the blobman use weld to teleport") - our real body has to actually
+					-- be there for the server to place the Blobman there too ("the server only lets a toy spawn
+					-- near our character"; spawning with just an explicit CFrame and no checks turned out to NOT
+					-- be enough - it spawned at our last known spot instead and only snapped to the blob once a
+					-- Blob Kick loop forced a teleport). (2) spawn the Blobman at the spot, (3) sit on it, (4)
+					-- jump off, (5) run the kill/ragdoll/spam-sit code (ported from Inicio()), (6) once we're
+					-- really seated: pin the model onto its spot and anchor the VehicleSeat ("HRP"), re-asserted
+					-- a few times since physics this far out (Y = 700,000,000) loses float precision and can
+					-- drift a little on its own even while anchored. The weld + desync camera then KEEP RUNNING
+					-- for as long as Seatless Blob stays on ("let it keep being there") - everyone else keeps
+					-- seeing us at our last normal spot the whole time we're really sitting on the Blobman, not
+					-- just during the spawn step. Only toggling it off (or a failed attempt) releases the weld
+					-- and puts our real body back. If the blob gets deleted the whole sequence re-runs.
 					local seatlessBlobPos = CFrame.new(283300, 700000000, -5705000)
 					local seatlessRunId = 0
 
@@ -25986,8 +25984,48 @@ end
 						end
 					end
 
+					-- Releases the weld started below (if any) and, if restoreHome, puts our real body back
+					-- where it was before Seatless Blob moved it. Safe to call any time, including from outside
+					-- (toggling off).
+					tbl12.SeatlessStopWeld = function(restoreHome)
+						local connection = tbl7.SeatlessWeldConn
+						if not connection then
+							return
+						end
+						connection:Disconnect()
+						tbl7.SeatlessWeldConn = nil
+						local desyncWasOn = tbl7.SeatlessDesyncWasOn
+						tbl7.SeatlessDesyncWasOn = nil
+
+						if not desyncWasOn then
+							tbl12.SetDesync(false)
+						end
+
+						local character, root = tbl12.Char()
+
+						if character then
+							pcall(tbl12.ToggleCollisions, character, true)
+						end
+
+						tbl12.ReturnPCLD()
+
+						if restoreHome and root and root.Parent and tbl7.SeatlessHomeCF then
+							local head = character and character:FindFirstChild("Head")
+
+							if head and tbl7.SeatlessHomeHeadCF then
+								head.CFrame = tbl7.SeatlessHomeHeadCF
+							end
+
+							root.CFrame = tbl7.SeatlessHomeCF
+						end
+
+						tbl7.SeatlessHomeCF = nil
+						tbl7.SeatlessHomeHeadCF = nil
+					end
+
 					tbl12.SeatlessBlob = function(enable)
 						tbl7.SeatlessActive = false
+						tbl12.SeatlessStopWeld(true)
 						if tbl7.SeatlessBlobModel and tbl7.SeatlessBlobModel.Parent then
 							tbl12.DestroyToy(tbl7.SeatlessBlobModel)
 						end
@@ -26003,39 +26041,79 @@ end
 							if not (character and root and humanoid and humanoid.Health > 0) then
 								return
 							end
+							local head = character:FindFirstChild("Head")
 
-							-- 1. SPAWN, directly at the fixed position - no camera trick, no moving our own body first
+							-- 1. WELD our real body to the spot (direct CFrame glide + velocity zero), hidden
+							-- behind the real Position Desync feature.
+							local homeCF = root.CFrame
+							local homeHeadCF = head and head.CFrame
+							local atCF = seatlessBlobPos * CFrame.new(0, 3, 12)
+							local desyncWasOn = tbl8.Desync
+							pcall(tbl12.ToggleCollisions, character, false)
+							tbl12.SetDesync(true)
+
+							local weldConn = RunService.Heartbeat:Connect(function()
+								if root.Parent then
+									root.CFrame = atCF
+									if head then
+										head.CFrame = atCF
+									end
+									root.AssemblyLinearVelocity = Vector3.zero
+									root.AssemblyAngularVelocity = Vector3.zero
+								end
+							end)
+
+							tbl7.SeatlessWeldConn = weldConn
+							tbl7.SeatlessDesyncWasOn = desyncWasOn
+							tbl7.SeatlessHomeCF = homeCF
+							tbl7.SeatlessHomeHeadCF = homeHeadCF
+
+							task.wait(0.15) -- let the server see us there before asking for the spawn
+
+							-- 2. SPAWN, now that our real body is actually at the spot
 							local blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
 							local blobHRP = blob and (blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1))
 							if not blobHRP then
 								if blob then
 									tbl12.DestroyToy(blob)
 								end
+								if tbl7.SeatlessWeldConn == weldConn then
+									tbl12.SeatlessStopWeld(true)
+								end
 								return
 							end
 							if runId ~= seatlessRunId then
 								tbl12.DestroyToy(blob)
+								if tbl7.SeatlessWeldConn == weldConn then
+									tbl12.SeatlessStopWeld(true)
+								end
 								return
 							end
 							tbl7.SeatlessBlobModel = blob
 
-							-- 2. SIT - SeatWeld pulls our character to the seat on its own
+							-- 3. SIT
 							pcall(blobHRP.Sit, blobHRP, humanoid)
 							task.wait(0.1)
 							if runId ~= seatlessRunId or not blobHRP.Parent then
+								if tbl7.SeatlessWeldConn == weldConn then
+									tbl12.SeatlessStopWeld(true)
+								end
 								return
 							end
 
-							-- 3. JUMP OFF
+							-- 4. JUMP OFF
 							pcall(function()
 								humanoid.Jump = true
 							end)
 							task.wait(0.1)
 							if runId ~= seatlessRunId or flag11 or not blobHRP.Parent then
+								if tbl7.SeatlessWeldConn == weldConn then
+									tbl12.SeatlessStopWeld(true)
+								end
 								return
 							end
 
-							-- 4. RUN THE CODE - ported verbatim from Inicio() (tick()-based, no extra guard before kill)
+							-- 5. RUN THE CODE - ported verbatim from Inicio() (tick()-based, no extra guard before kill)
 							local t = tick()
 							local ragdollFired = false
 							humanoid.Health = 0
@@ -26081,18 +26159,26 @@ end
 							end
 
 							if runId ~= seatlessRunId then
+								if tbl7.SeatlessWeldConn == weldConn then
+									tbl12.SeatlessStopWeld(false)
+								end
 								return
 							end
 
-							-- 5. ANCHOR THE HRP - only now that we're legitimately seated, exactly on its spot
+							-- 6. ANCHOR THE HRP - only now that we're legitimately seated, exactly on its spot
 							if success and blobHRP.Parent then
 								tbl12.SeatlessParkBlob()
 								tbl7.SeatlessActive = true
 							end
+
 							if not success then
+								if tbl7.SeatlessWeldConn == weldConn then
+									tbl12.SeatlessStopWeld(true)
+								end
 								tbl12.DestroyToy(blob)
 								tbl7.SeatlessBlobModel = nil
 							end
+							-- on success the weld + desync are left running - see the big comment above
 
 							-- parent upvalue fix (Blobman features): the Humanoid.Seated signal doesn't reliably fire for
 							-- a seat taken like this, so it's set directly and kept set.
