@@ -25952,18 +25952,21 @@ end
 						end
 					end
 
-					-- SEATLESS BLOB - exact sequence as given: (1) spawn the Blobman directly at the fixed
-					-- position, (2) sit on it, (3) jump off, (4) anchor the VehicleSeat ("HRP") right there -
-					-- nothing else on the model, only this one part, (5) THEN run the kill/ragdoll/spam-sit code
-					-- (ported from Inicio()). Anchoring before the kill code means the seat can't drift while the
-					-- ragdoll/spam-sit forces are being thrown at it, which is a likely source of it "bugging
-					-- alot". Our own body/PCLD is never moved, welded, or desynced - only the Blobman model ever
-					-- gets touched, once, at step 4. If the blob gets deleted the whole sequence re-runs.
+					-- SEATLESS BLOB, exact sequence: (1) spawn the Blobman at the fixed position, (2) sit on
+					-- it, (3) jump off, (4) run the kill/ragdoll/spam-sit code (ported from Inicio()), (5) once
+					-- we're really seated: anchor the VehicleSeat ("HRP") there, nothing else. tbl7.SeatlessSequence
+					-- is set for the whole attempt (from the moment we sit, since that's what actually moves our
+					-- character up to the spot) so Anti Void doesn't see us at this huge Y and snap us straight
+					-- back to spawn within 30ms - that was the real reason the blob never looked like it landed
+					-- where asked. Our own body/PCLD is otherwise never welded or desynced - only the Blobman
+					-- model ever gets touched (anchored, at step 5). If the blob gets deleted while this is on,
+					-- the whole sequence (spawn/sit/jump/run code/anchor) re-runs automatically.
 					local seatlessBlobPos = CFrame.new(0, 8000000, 0)
 					local seatlessRunId = 0
 
 					tbl12.SeatlessBlob = function(enable)
 						tbl7.SeatlessActive = false
+						tbl7.SeatlessSequence = false
 						if tbl7.SeatlessBlobModel and tbl7.SeatlessBlobModel.Parent then
 							tbl12.DestroyToy(tbl7.SeatlessBlobModel)
 						end
@@ -25980,17 +25983,29 @@ end
 								return
 							end
 
+							local blob = nil
+
+							local function abort(destroy)
+								if runId == seatlessRunId then
+									tbl7.SeatlessSequence = false
+								end
+								if destroy and blob then
+									tbl12.DestroyToy(blob)
+									tbl7.SeatlessBlobModel = nil
+								end
+							end
+
+							tbl7.SeatlessSequence = true
+
 							-- 1. SPAWN at the fixed position
-							local blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
+							blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
 							local blobHRP = blob and (blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1))
 							if not blobHRP then
-								if blob then
-									tbl12.DestroyToy(blob)
-								end
+								abort(true)
 								return
 							end
 							if runId ~= seatlessRunId then
-								tbl12.DestroyToy(blob)
+								abort(true)
 								return
 							end
 							tbl7.SeatlessBlobModel = blob
@@ -25999,8 +26014,7 @@ end
 							pcall(blobHRP.Sit, blobHRP, humanoid)
 							task.wait(0.1)
 							if runId ~= seatlessRunId or not blobHRP.Parent then
-								tbl12.DestroyToy(blob)
-								tbl7.SeatlessBlobModel = nil
+								abort(true)
 								return
 							end
 
@@ -26010,21 +26024,11 @@ end
 							end)
 							task.wait(0.1)
 							if runId ~= seatlessRunId or flag11 or not blobHRP.Parent then
-								tbl12.DestroyToy(blob)
-								tbl7.SeatlessBlobModel = nil
+								abort(true)
 								return
 							end
 
-							-- 4. ANCHOR THE HRP - exactly on its spot, before the kill code runs so the seat can't
-							-- drift while being ragdolled/spam-sat on
-							pcall(function()
-								blob:PivotTo(seatlessBlobPos)
-								blobHRP.AssemblyLinearVelocity = Vector3.zero
-								blobHRP.AssemblyAngularVelocity = Vector3.zero
-								blobHRP.Anchored = true
-							end)
-
-							-- 5. RUN THE CODE - ported verbatim from Inicio() (tick()-based, no extra guard before kill)
+							-- 4. RUN THE CODE - ported verbatim from Inicio() (tick()-based, no extra guard before kill)
 							local t = tick()
 							local ragdollFired = false
 							humanoid.Health = 0
@@ -26070,14 +26074,22 @@ end
 							end
 
 							if runId ~= seatlessRunId then
+								abort(false)
 								return
 							end
 
-							if success then
+							-- 5. ANCHOR THE HRP - only now that we're legitimately seated, exactly on its spot
+							if success and blobHRP.Parent then
+								pcall(function()
+									blob:PivotTo(seatlessBlobPos)
+									blobHRP.AssemblyLinearVelocity = Vector3.zero
+									blobHRP.AssemblyAngularVelocity = Vector3.zero
+									blobHRP.Anchored = true
+								end)
 								tbl7.SeatlessActive = true
+								tbl7.SeatlessSequence = false
 							else
-								tbl12.DestroyToy(blob)
-								tbl7.SeatlessBlobModel = nil
+								abort(true)
 							end
 
 							-- parent upvalue fix (Blobman features): the Humanoid.Seated signal doesn't reliably fire for
@@ -34114,6 +34126,11 @@ Escape Timer: %*]]
 				end
 
 				flag12 = flag12 and not ((v23.Position - part3.Position).Magnitude < 150)
+
+				-- EXEMPTION: never snap us back while Seatless Blob is spawning/seating us or already
+				-- sitting at its (intentionally huge) Y coordinate - that's exactly what this check would
+				-- otherwise "correct" within 30ms, which is why the blob never seemed to land where asked.
+				flag12 = flag12 and not tbl7.SeatlessSequence and not tbl7.SeatlessActive
 
 				if flag12 then
 					tbl12.Teleport(v23, CFrame.new(0, 15, 0))
