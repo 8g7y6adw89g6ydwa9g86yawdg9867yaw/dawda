@@ -30614,6 +30614,7 @@ end
 			if not (v24 and v25 and v25.Health > 0) or not parent then
 				return
 			end
+			local head = v23 and v23:FindFirstChild("Head")
 			local v26, v27, v28 = tbl12.Char(arg)
 			local rootAttachment = v27 and v27:FindFirstChild("RootAttachment")
 			if not (rootAttachment and v28 and v28.Health > 0) or not parent then
@@ -30622,28 +30623,59 @@ end
 			local now3 = tick()
 
 			if tbl12.GetMagnitude(v24, v27) > 40 then
-				local cFrame2 = v24.CFrame
-				currentCamera.CameraType = Enum.CameraType.Scriptable
+				-- WELD + DESYNC CAMERA, same as everywhere else: a direct CFrame glide every Heartbeat with
+				-- velocity zeroed, hidden behind the real Position Desync feature, snapped back home on
+				-- release - instead of the old CameraType.Scriptable + plain Teleport loop (slower, and didn't
+				-- hide/weld the same way the rest of the script does).
+				local homeCF = v24.CFrame
+				local homeHeadCF = head and head.CFrame
+				local chaseCF = v24.CFrame
+				local desyncWasOn = tbl8.Desync
+				pcall(tbl12.ToggleCollisions, v23, false)
+				tbl12.SetDesync(true)
 
-				while true do
-					local flag12 = parent and v27 and v27.Parent and v25.Health > 0 and v28.Health > 0 and rootAttachment and v22.RightWeld.Attachment0 ~= rootAttachment
-
-					if flag12 then
-						flag12 = tick() - now3 < (arg2 or 0.7)
+				local connection = RunService.Heartbeat:Connect(function()
+					v24.CFrame = chaseCF
+					if head then
+						head.CFrame = chaseCF
 					end
+					v24.AssemblyLinearVelocity = Vector3.zero
+					v24.AssemblyAngularVelocity = Vector3.zero
+				end)
 
-					if flag12 then
-						tbl12.Teleport(v24, tbl12.PredictCFrame(v27) - Vector3.new(0, 15, 0))
-						task.wait()
-						v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
-						continue
+				pcall(function()
+					while true do
+						local flag12 = parent and v27 and v27.Parent and v25.Health > 0 and v28.Health > 0 and rootAttachment and v22.RightWeld.Attachment0 ~= rootAttachment
+
+						if flag12 then
+							flag12 = tick() - now3 < (arg2 or 0.7)
+						end
+
+						if flag12 then
+							chaseCF = tbl12.PredictCFrame(v27) - Vector3.new(0, 15, 0)
+							RunService.Heartbeat:Wait()
+							v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
+							continue
+						end
+
+						break
 					end
+				end)
 
-					break
+				connection:Disconnect()
+
+				if not desyncWasOn then
+					tbl12.SetDesync(false)
 				end
 
-				tbl12.Teleport(v24, cFrame2, CFrame.new(0, 5, 0))
-				currentCamera.CameraType = Enum.CameraType.Custom
+				pcall(tbl12.ToggleCollisions, v23, true)
+
+				if head and homeHeadCF then
+					head.CFrame = homeHeadCF
+				end
+
+				v24.CFrame = homeCF
+				tbl12.ReturnPCLD()
 			else
 				v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
 				task.wait(0.1)
@@ -30666,6 +30698,7 @@ end
 			if not (v24 and v25 and v25.Health > 0) or not parent then
 				return
 			end
+			local head = v23 and v23:FindFirstChild("Head")
 			local v26, v27, v28 = tbl12.Char(arg)
 			if not (v27 and v28 and v28.Health > 0) or not parent then
 				return
@@ -30683,28 +30716,43 @@ end
 			local cframe = CFrame.new()
 			local cframe2 = CFrame.new()
 			local connection = nil
+			local desyncWasOn = nil
 			tbl7.States.Owning = true
 
+			-- WELD + DESYNC CAMERA, same as everywhere else: direct CFrame glide with velocity zeroed,
+			-- hidden behind the real Position Desync feature - instead of the old "ClientVision" RenderStep
+			-- bind on its own (no velocity zero, no collision toggle, no head), which is the slow/janky one.
 			local function fn21()
 				cframe = v24.CFrame
 				cframe2 = v24.CFrame
-
-				RunService:BindToRenderStep("ClientVision", Enum.RenderPriority.Camera.Value - 1, function()
-					v24.CFrame = cframe
-				end)
+				pcall(tbl12.ToggleCollisions, v23, false)
+				desyncWasOn = tbl8.Desync
+				tbl12.SetDesync(true)
 
 				connection = RunService.Heartbeat:Connect(function()
-					cframe = v24.CFrame
 					v24.CFrame = cframe2
+					if head then
+						head.CFrame = cframe2
+					end
+					v24.AssemblyLinearVelocity = Vector3.zero
+					v24.AssemblyAngularVelocity = Vector3.zero
 				end)
 			end
 
 			local function fn22()
-				RunService:UnbindFromRenderStep("ClientVision")
-
 				if connection then
 					connection:Disconnect()
 					connection = nil
+				end
+
+				if not desyncWasOn then
+					tbl12.SetDesync(false)
+				end
+
+				pcall(tbl12.ToggleCollisions, v23, true)
+
+				if head then
+					head.CFrame = cframe
 				end
 
 				if v24 then
@@ -30839,6 +30887,8 @@ end
 
 			v22.CreatureGrab:FireServer(nil, v24, v22.RightWeld)
 
+			local ekiClaimed = {}
+
 			local function fn21()
 				if v22.RightWeld.Parent then
 					local rightWeld = v22.RightWeld
@@ -30851,6 +30901,15 @@ end
 						v26:Destroy()
 					end
 				end
+
+				-- always hand back any PCLD claimed below while they were held in place
+				if sethiddenproperty then
+					for _, v26 in ipairs(tbl16) do
+						if v26.Root.Parent and ekiClaimed[v26.Root] then
+							pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", nil)
+						end
+					end
+				end
 			end
 
 			local n36 = os.clock() + 2
@@ -30860,6 +30919,12 @@ end
 					if v26.Root.Parent then
 						v26.Root.CFrame = v26.CFrame
 						tbl12.ResetVelocity(v26.Root)
+
+						-- EKI: also claim the target's own PCLD while he's held in place here, same technique
+						-- used elsewhere, so the server stops fighting the pin above.
+						if tbl8.EKI and sethiddenproperty and not ekiClaimed[v26.Root] and tbl12.IsNetworkOwner(v26.Root) then
+							ekiClaimed[v26.Root] = pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", v26.Root)
+						end
 					end
 				end
 
