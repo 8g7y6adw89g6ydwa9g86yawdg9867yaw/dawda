@@ -26038,7 +26038,7 @@ end
 							local ragdollFired = false
 							humanoid.Health = 0
 							task.wait(1)
-							while tick() - t < 4 do
+							while runId == seatlessRunId and tick() - t < 4 do
 								RunService.Heartbeat:Wait()
 								humanoid.EvaluateStateMachine = false
 								humanoid.BreakJointsOnDeath = false
@@ -26063,7 +26063,7 @@ end
 
 							local success = false
 							local startTime = tick()
-							while tick() - startTime < 5 do
+							while runId == seatlessRunId and tick() - startTime < 5 do
 								task.wait()
 								local occupant = blobHRP.Occupant
 								local _, _, ourHumanoid = tbl12.Char()
@@ -26093,6 +26093,7 @@ end
 								end)
 								tbl7.SeatlessActive = true
 								tbl7.SeatlessSequence = false
+								tbl7.SeatlessSeatedAt = os.clock()
 							else
 								abort(true)
 							end
@@ -26142,6 +26143,22 @@ end
 										ancestryConn:Disconnect()
 
 										if tbl8.SeatlessBlob and runId == seatlessRunId then
+											-- SAFETY: if it keeps getting destroyed again almost instantly, stop
+											-- auto-retrying instead of looping respawn attempts as fast as
+											-- possible - a tight respawn loop like that is a likely crash cause.
+											if os.clock() - (tbl7.SeatlessSeatedAt or 0) < 2 then
+												if not flag11 then
+													pcall(function()
+														lib:Notify({
+															Title = "Resonance",
+															Description = "Seatless Blob kept getting destroyed right away - stopped auto-retrying.",
+															IconColor = Color3.new(1, 1, 1),
+														})
+													end)
+												end
+												return
+											end
+
 											task.spawn(tbl12.SeatlessBlob, true)
 										end
 									end
@@ -31420,8 +31437,9 @@ end
 							tbl12.RNO(v26)
 						end
 					else
+						-- "Release" kick: a little bit faster
 						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait(0.01535)
+						task.wait(0.01485)
 						v28.CreatureRelease:FireServer(v28.RightWeld)
 						tbl12.Grab(v26)
 						task.spawn(tbl12.Ragdoll, v25)
@@ -31430,7 +31448,7 @@ end
 							tbl12.RNO(v26)
 						end
 
-						task.wait(0.01535)
+						task.wait(0.01485)
 					end
 				end
 
