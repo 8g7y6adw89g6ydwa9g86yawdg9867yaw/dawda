@@ -21145,7 +21145,12 @@ end
 
 					tbl12.SetDesync = function(arg)
 						local desync = arg == true and not flag11 and tbl12.DesyncSupported == true
-						if tbl8.Desync == desync then
+
+						-- ALWAYS force a fresh (re)connect when turning desync ON, even if tbl8.Desync already
+						-- says true - that flag can go stale if the underlying connection died silently (a
+						-- flipped fflag, a missed getfflag/setfflag call), which is exactly why "sometimes it
+						-- doesn't use the desync camera" even though SetDesync(true) is called every time.
+						if tbl8.Desync == desync and not desync then
 							return
 						end
 						tbl12.SetRuntimeConnection("Desync", nil, false)
@@ -30620,7 +30625,20 @@ end
 			end
 			local now3 = tick()
 
-			if tbl12.GetMagnitude(v24, v27) > 40 then
+			if tbl7.SeatlessActive then
+				-- EXPERIMENT, untested: with Seatless Blob we're genuinely seated on the (far away, anchored)
+				-- blob the whole time - moving our own body near him would drag the blob there too since
+				-- we're welded to its seat, which defeats welding ourselves in the first place. Try firing
+				-- CreatureGrab with no chase/weld of anything at all and see if it still takes - a weld-type
+				-- joint doesn't need proximity to attach, only the server might refuse the remote itself if it
+				-- checks our distance to him, which this can't get around. Tell me if this actually works.
+				local now4 = tick()
+
+				while parent and v27 and v27.Parent and v25.Health > 0 and v28.Health > 0 and rootAttachment and v22.RightWeld.Attachment0 ~= rootAttachment and tick() - now4 < (arg2 or 0.7) do
+					v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
+					RunService.Heartbeat:Wait()
+				end
+			elseif tbl12.GetMagnitude(v24, v27) > 40 then
 				-- WELD + DESYNC CAMERA, same as everywhere else: a direct CFrame glide every Heartbeat with
 				-- velocity zeroed, hidden behind the real Position Desync feature, snapped back home on
 				-- release - instead of the old CameraType.Scriptable + plain Teleport loop (slower, and didn't
@@ -30706,7 +30724,12 @@ end
 				return true
 			end
 			local now3 = tick()
-			local flag12 = tbl12.GetMagnitude(v24, v27) >= 40
+
+			-- EXPERIMENT, untested: with Seatless Blob we're genuinely seated on the (far away, anchored)
+			-- blob the whole time - moving/welding our own body would drag the blob there too since we're
+			-- welded to its seat, which defeats the point of welding ourselves at all. Never weld in that
+			-- case; just fire the remotes below with nothing moving. Tell me if this actually works.
+			local flag12 = not tbl7.SeatlessActive and tbl12.GetMagnitude(v24, v27) >= 40
 			if flag12 and tbl7.States.Owning then
 				return
 			end
@@ -30791,9 +30814,9 @@ end
 							v22.RightWeld.Enabled = false
 
 							-- a tiny bit faster again
-							task.wait(0.009861111111111112)
+							task.wait(0.008861111111111112)
 							v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
-							task.wait(0.009861111111111112)
+							task.wait(0.008861111111111112)
 							v22.CreatureRelease:FireServer(v22.RightWeld)
 							continue
 						end
@@ -31136,6 +31159,37 @@ end
 			end
 		end
 
+		-- INSTANT DEATH ON RESPAWN: once Blob Kill lands on someone, arm a one-shot watcher on their
+		-- CharacterAdded - the moment their new character actually appears (right near spawn, before they
+		-- can move), immediately run the exact same tbl14.Kill on them again. Each successful kill re-arms
+		-- the watcher for the next respawn, so it keeps chaining as long as he's still Blob-selected and
+		-- Blob Method is still "Kill"; stops the instant either of those is no longer true.
+		local blobKillRespawnWatchers = setmetatable({}, { __mode = "k" })
+
+		tbl12.ArmBlobKillRespawn = function(player)
+			if not player or blobKillRespawnWatchers[player] then
+				return
+			end
+
+			local connection
+
+			connection = player.CharacterAdded:Connect(function()
+				blobKillRespawnWatchers[player] = nil
+
+				if connection then
+					connection:Disconnect()
+				end
+
+				if flag11 or not tbl7.SelectedPlayersBlob[player] or tbl9.BlobMethod ~= "Kill" then
+					return
+				end
+
+				task.spawn(tbl14.Kill, player)
+			end)
+
+			blobKillRespawnWatchers[player] = connection
+		end
+
 		tbl14.Kill = function(arg)
 			if not parent then
 				return
@@ -31154,12 +31208,14 @@ end
 				v27:ChangeState(Enum.HumanoidStateType.Dead)
 				task.wait()
 				tbl12.ReturnPCLD()
+				tbl12.ArmBlobKillRespawn(arg)
 				return true
 			end
 
 			if v27.Sit and v27.SeatPart and tbl14.Bring(arg) then
 				tbl12.Kill(arg)
 				tbl12.ReturnPCLD()
+				tbl12.ArmBlobKillRespawn(arg)
 				return true
 			end
 
@@ -31355,9 +31411,9 @@ end
 					-- lower the Blobman Kick remotes rate by 0.0004s (fewer CreatureGrab/CreatureDrop/CreatureRelease per second)
 					if tbl9.BKMethod == 1 then
 						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait(0.01635)
+						task.wait(0.01535)
 						v28.CreatureDrop:FireServer(v28.RightWeld)
-						task.wait(0.01635)
+						task.wait(0.01535)
 
 						if tbl8.NetworkOwnerInKick then
 							tbl12.Grab(v26)
@@ -31365,7 +31421,7 @@ end
 						end
 					else
 						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait(0.01635)
+						task.wait(0.01535)
 						v28.CreatureRelease:FireServer(v28.RightWeld)
 						tbl12.Grab(v26)
 						task.spawn(tbl12.Ragdoll, v25)
@@ -31374,7 +31430,7 @@ end
 							tbl12.RNO(v26)
 						end
 
-						task.wait(0.01635)
+						task.wait(0.01535)
 					end
 				end
 
