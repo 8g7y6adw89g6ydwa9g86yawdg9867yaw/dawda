@@ -30721,6 +30721,12 @@ end
 				end
 
 				connection = RunService.Heartbeat:Connect(function()
+					-- REACT FASTER: track the predicted target position every Heartbeat, not just once per
+					-- remote-pacing cycle below - the weld now keeps up with him at full frame rate.
+					if flag12 then
+						cframe2 = tbl12.PredictCFrame(v27) - Vector3.new(0, 15, 0)
+					end
+
 					v24.CFrame = cframe2
 					if head then
 						head.CFrame = cframe2
@@ -30770,17 +30776,12 @@ end
 						end
 
 						if flag13 then
-							local v29 = tbl12.PredictCFrame(v27)
 							v22.RightWeld.Enabled = false
 
-							if flag12 then
-								cframe2 = v29 - Vector3.new(0, 15, 0)
-							end
-
-							-- lower CreatureGrab/CreatureRelease rate by 0.0004s - firing them that fast may be why holds drop
-							task.wait(0.010361111111111112)
+							-- a tiny bit faster again
+							task.wait(0.009861111111111112)
 							v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
-							task.wait(0.010361111111111112)
+							task.wait(0.009861111111111112)
 							v22.CreatureRelease:FireServer(v22.RightWeld)
 							continue
 						end
@@ -31140,13 +31141,19 @@ end
 				v27.BreakJointsOnDeath = false
 				v27:ChangeState(Enum.HumanoidStateType.Dead)
 				task.wait()
+				tbl12.ReturnPCLD()
 				return true
 			end
 
 			if v27.Sit and v27.SeatPart and tbl14.Bring(arg) then
 				tbl12.Kill(arg)
+				tbl12.ReturnPCLD()
 				return true
 			end
+
+			-- hand our own PCLD back even on a failed attempt (Release may have welded briefly before
+			-- giving up without ever reaching fn22)
+			tbl12.ReturnPCLD()
 		end
 
 		tbl14.RemoveGucci = function(arg)
