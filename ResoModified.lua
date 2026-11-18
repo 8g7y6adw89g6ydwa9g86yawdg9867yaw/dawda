@@ -31174,21 +31174,7 @@ end
 			v28.RightWeld.Enabled = false
 			v28.RightOri.Enabled = false
 
-			-- RETRY ACQUIRE: a single SNO/Release attempt gives up after ~0.65s, which is exactly when a
-			-- target flying away or juking the chase causes Blob Kick to "just fail" instead of catching up -
-			-- "really bad in general at getting the target". Keep retrying for a few seconds instead.
-			local acquired = false
-			local acquireStart = tick()
-
-			while not acquired and tick() - acquireStart < 3 and v26.Parent and v27.Parent and v27.Health > 0 and parent and parent.Parent do
-				acquired = tbl12.SNO(v26) or tbl14.Release(arg)
-
-				if not acquired then
-					task.wait()
-				end
-			end
-
-			if acquired then
+			if tbl12.SNO(v26) or tbl14.Release(arg) then
 				v27.Sit = true
 
 				task.delay(0.5, function()
@@ -31210,11 +31196,18 @@ end
 				task.wait(0.06)
 				rootAttachment.Parent = v25
 
-				local lastKickPulse = 0
+				-- HIDE WHILE LOOPING: local-only (only we stop seeing it) - the Blobman isn't anything we need
+				-- to look at while a Kick loop is running on it.
+				local blobTCache = {}
+
+				for _, descendant in ipairs(parent:GetDescendants()) do
+					if descendant:IsA("BasePart") then
+						blobTCache[descendant] = descendant.Transparency
+						descendant.Transparency = 1
+					end
+				end
 
 				while arg.Parent and v26.Parent and v27.Parent and v27.Health > 0 and parent and parent.Parent and tbl7.SelectedPlayersBlob[arg] and tbl8.LoopApplyMethod and tbl9.BlobMethod == "Kick" and tbl12.GetMagnitude(v23, v26) <= 41 and not v27.SeatPart and (v24.Sit or tbl7.SeatlessActive) do
-					RunService.Heartbeat:Wait()
-
 					task.spawn(function()
 						v27.RequiresNeck = false
 						tbl12.ToggleMotor6D(v25, false, true)
@@ -31233,40 +31226,34 @@ end
 						task.spawn(tbl12.RemoveSticky, v25)
 					end
 
-					-- THROTTLE: only re-fire the hold remotes a handful of times per second instead of every
-					-- single frame - firing CreatureGrab/CreatureDrop/CreatureRelease (and Grab/RNO) every
-					-- frame for as long as the loop stays on is exactly what "spikes our ping when it's been
-					-- on for too long" describes. The local hold above still runs every frame.
-					local pulseGap = 0.05
-					local pingLv = tbl12.PingLevel()
+					if tbl9.BKMethod == 1 then
+						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
+						task.wait()
+						v28.CreatureDrop:FireServer(v28.RightWeld)
+						task.wait()
 
-					if pingLv >= 2 then
-						pulseGap = 0.12
-					elseif pingLv == 1 then
-						pulseGap = 0.08
-					end
-
-					if os.clock() - lastKickPulse >= pulseGap then
-						lastKickPulse = os.clock()
-
-						if tbl9.BKMethod == 1 then
-							v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-							v28.CreatureDrop:FireServer(v28.RightWeld)
-
-							if tbl8.NetworkOwnerInKick then
-								tbl12.Grab(v26)
-								tbl12.RNO(v26)
-							end
-						else
-							v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-							v28.CreatureRelease:FireServer(v28.RightWeld)
+						if tbl8.NetworkOwnerInKick then
 							tbl12.Grab(v26)
-							task.spawn(tbl12.Ragdoll, v25)
-
-							if weldConstraint.Enabled then
-								tbl12.RNO(v26)
-							end
+							tbl12.RNO(v26)
 						end
+					else
+						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
+						task.wait()
+						v28.CreatureRelease:FireServer(v28.RightWeld)
+						tbl12.Grab(v26)
+						task.spawn(tbl12.Ragdoll, v25)
+
+						if weldConstraint.Enabled then
+							tbl12.RNO(v26)
+						end
+
+						task.wait()
+					end
+				end
+
+				for descendant, transparency in pairs(blobTCache) do
+					if descendant.Parent then
+						descendant.Transparency = transparency
 					end
 				end
 
