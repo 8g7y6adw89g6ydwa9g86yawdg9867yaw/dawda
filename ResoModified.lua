@@ -19280,20 +19280,15 @@ do
 						local cframe2 = CFrame.new()
 						local cframe3 = CFrame.new()
 						local connection = nil
-						local desyncWasOn = nil
 
 						if (v25.Position - arg.Position).Magnitude >= 31 then
 							flag12 = true
 						end
 
-						-- WELD + DESYNC CAMERA: the weld is a plain direct CFrame glide to cframe3 every Heartbeat
-						-- (velocity zeroed so it doesn't fight itself) - that's the actual weld, no AlignPosition.
-						-- "Desync camera" is the existing Position Desync feature (tbl8.Desync/tbl12.SetDesync),
-						-- the same one used for every other teleport - turning it on for this window is what hides
-						-- the glide from the server/other clients. tbl12.UpdateDesync already claims/releases our
-						-- own PhysicsRepRootPart on its own cycle while desync is on, so the weld doesn't also touch
-						-- it (that would just fight the desync cycle). On release we always snap back to exactly
-						-- where we started (cframe2/cframe) - we only ever came here to claim ownership, not to stay.
+						-- WELD + DESYNC CAMERA (the original RSCClient trick): the weld is a direct CFrame glide to cframe3
+						-- every Heartbeat with velocity zeroed; the desync camera is a RenderStep bind (just before the camera
+						-- reads) that puts our body + head back where they were, so the glide is never seen. cframe/cframe2
+						-- always hold the real "home" position, and we snap back to it on release.
 
 						local flag13 = arg.Name == "HumanoidRootPart" or arg.Name == "Torso"
 						local v27 = nil
@@ -19326,14 +19321,16 @@ do
 							cframe2 = v25.CFrame
 							cframe = head.CFrame
 							cframe3 = v25.CFrame
-
-							-- fewer physics collisions fighting us at the far end while this weld-glide is active
 							pcall(tbl12.ToggleCollisions, v24, false)
 
-							desyncWasOn = tbl8.Desync
-							tbl12.SetDesync(true)
+							RunService:BindToRenderStep("RSCClient", Enum.RenderPriority.Camera.Value - 1, function()
+								v25.CFrame = cframe2
+								head.CFrame = cframe
+							end)
 
 							connection = RunService.Heartbeat:Connect(function()
+								cframe2 = v25.CFrame
+								cframe = head.CFrame
 								v25.CFrame = cframe3
 								head.CFrame = cframe3
 								v25.AssemblyLinearVelocity = Vector3.zero
@@ -19342,19 +19339,19 @@ do
 						end
 
 						local function fn22()
+							pcall(function()
+								RunService:UnbindFromRenderStep("RSCClient")
+							end)
+
 							if connection then
 								connection:Disconnect()
 								connection = nil
 							end
 
-							if not desyncWasOn then
-								tbl12.SetDesync(false)
-							end
-
 							pcall(tbl12.ToggleCollisions, v24, true)
-
 							head.CFrame = cframe
 							v25.CFrame = cframe2
+							tbl12.ReturnPCLD()
 						end
 
 						local ok, result = pcall(function()
@@ -21108,6 +21105,24 @@ end
 						end
 						flag12 = false
 						n36 = os.clock() + 0.14
+					end
+
+					-- Hands our own PCLD (PhysicsRepRootPart + sleeping flag) back to normal after anything that teleports us.
+					-- Skipped while Position Desync is on, since that feature runs its own claim/release cycle.
+					tbl12.ReturnPCLD = function()
+						local function once()
+							if flag11 or tbl8.Desync or type(sethiddenproperty) ~= "function" then
+								return
+							end
+							local _, root = tbl12.Char()
+							if root and root.Parent then
+								pcall(sethiddenproperty, root, "PhysicsRepRootPart", nil)
+								pcall(sethiddenproperty, root, "NetworkIsSleeping", false)
+							end
+						end
+						once()
+						task.delay(0.1, once)
+						task.delay(0.35, once)
 					end
 
 					tbl12.SetDesync = function(arg)
@@ -25919,78 +25934,171 @@ end
 						end
 					end
 
-					-- SEATLESS BLOB, in order: (1) spawn the Blobman at the fixed position, no checks - we can spawn
-					-- anywhere, (2) sit on it normally while it's still unanchored and welds like any other toy,
-					-- (3) jump OFF it again, (4) run the kill/ragdoll/spam-sit code (ported straight from the
-					-- Inicio() script: kill but never wait for a respawn - the same, now-dead humanoid/root gets
-					-- spam-sat onto the seat, which is what actually makes it take) to force a real seat, (5) THEN
-					-- anchor the VehicleSeat (its "HRP") now that we're legitimately seated. This logic is local to
-					-- Seatless Blob only - nothing else calls it. Kept unnamed so the normal Blobman features
-					-- (Kick/Kill/etc, which key off sitting on a model literally named "CreatureBlobman") still
-					-- work while this is active; `parent` is set directly the moment we're seated instead of
-					-- relying on the Humanoid.Seated signal (which doesn't reliably fire for this hacky a seat),
-					-- and we also wait for the server's own BlobmanSeatAndOwnerScript/RightDetector/RightWeld to
-					-- actually show up before calling it ready - those are what Kick/Kill/etc. actually fire
-					-- through (tbl14.GetBlobmanComponents), and the server only wires them up a moment after a
-					-- real Occupant is set, so using them too early is why the remotes were silently doing nothing.
-					-- If the blob gets deleted, the whole sequence is re-run automatically. Off just deletes it.
+					-- SEATLESS BLOB, in order: (1) hide the whole thing behind the desync camera (RSCSeatless: the camera
+					-- keeps seeing our real spot, only the physics/server body is at the blob) and put our body at the
+					-- spawn spot - the server only lets a toy spawn near our character, so just asking for a far-away
+					-- position (what used to happen) put the blob somewhere else, (2) spawn the Blobman there, (3) sit
+					-- on it, (4) jump off, (5) run the kill/ragdoll/spam-sit code (ported from Inicio()), (6) only once
+					-- we're really seated: put the blob exactly on its spot and anchor the VehicleSeat ("HRP").
+					-- While anchored it is parked far away. Whenever a Blobman feature (Kick/Bring/Kill/Lock/Follow/
+					-- Remove Gucci/loops) runs, tbl12.SeatlessBegin/End wrap it: the blob is unanchored and glued to
+					-- our character for the duration (so its hands are where the target is, exactly like riding a normal
+					-- one), then parked + anchored again right after. If the blob gets deleted the sequence re-runs.
 					local seatlessBlobPos = CFrame.new(283300, 700000000, -5705000)
 					local seatlessRunId = 0
 
+					tbl12.SeatlessParkBlob = function()
+						if tbl7.SeatlessTether then
+							tbl7.SeatlessTether:Disconnect()
+							tbl7.SeatlessTether = nil
+						end
+						local blob = tbl7.SeatlessBlobModel
+						local seat = blob and blob.Parent and blob:FindFirstChild("VehicleSeat")
+						if not seat then
+							return
+						end
+						pcall(function()
+							blob:PivotTo(tbl7.SeatlessParkCF or seatlessBlobPos)
+							seat.AssemblyLinearVelocity = Vector3.zero
+							seat.AssemblyAngularVelocity = Vector3.zero
+							seat.Anchored = true
+						end)
+					end
+
+					tbl12.SeatlessBegin = function()
+						local blob = tbl7.SeatlessBlobModel
+						if not (tbl7.SeatlessActive and blob and blob.Parent) then
+							return
+						end
+						tbl7.SeatlessBusy = (tbl7.SeatlessBusy or 0) + 1
+						tbl7.SeatlessBusyToken = nil
+						if tbl7.SeatlessTether then
+							return
+						end
+						local seat = blob:FindFirstChild("VehicleSeat")
+						if not seat then
+							return
+						end
+						local offset = seat.CFrame:ToObjectSpace(blob:GetPivot())
+						pcall(function()
+							for _, part in ipairs(blob:GetDescendants()) do
+								if part:IsA("BasePart") then
+									part.CanCollide = false
+								end
+							end
+							seat.Anchored = false
+						end)
+						tbl7.SeatlessTether = RunService.Heartbeat:Connect(function()
+							local _, root = tbl12.Char()
+							if root and seat.Parent then
+								pcall(function()
+									blob:PivotTo(root.CFrame * offset)
+									seat.AssemblyLinearVelocity = Vector3.zero
+									seat.AssemblyAngularVelocity = Vector3.zero
+								end)
+							end
+						end)
+					end
+
+					tbl12.SeatlessEnd = function()
+						if (tbl7.SeatlessBusy or 0) <= 0 then
+							return
+						end
+						tbl7.SeatlessBusy = tbl7.SeatlessBusy - 1
+						if tbl7.SeatlessBusy > 0 then
+							return
+						end
+						local token = {}
+						tbl7.SeatlessBusyToken = token
+						task.delay(0.7, function()
+							if tbl7.SeatlessBusyToken == token and (tbl7.SeatlessBusy or 0) <= 0 then
+								tbl7.SeatlessBusyToken = nil
+								tbl12.SeatlessParkBlob()
+							end
+						end)
+					end
+
 					tbl12.SeatlessBlob = function(enable)
+						if tbl7.SeatlessTether then
+							tbl7.SeatlessTether:Disconnect()
+							tbl7.SeatlessTether = nil
+						end
+						tbl7.SeatlessActive = false
+						tbl7.SeatlessBusy = 0
+						tbl7.SeatlessBusyToken = nil
 						if tbl7.SeatlessBlobModel and tbl7.SeatlessBlobModel.Parent then
 							tbl12.DestroyToy(tbl7.SeatlessBlobModel)
 						end
 						tbl7.SeatlessBlobModel = nil
 						seatlessRunId += 1
-
 						if not enable then
 							return
 						end
-
 						local runId = seatlessRunId
-
-						-- 1. SPAWN - no arrival/position checks, we can spawn anywhere
-						local blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
-
-						if not blob then
-							return
-						end
-
-						local blobHRP = blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1)
-
-						if not blobHRP then
-							tbl12.DestroyToy(blob)
-							return
-						end
-
-						tbl7.SeatlessBlobModel = blob
 
 						task.spawn(function()
 							local character, root, humanoid = tbl12.Char()
-
-							if not (character and root and humanoid) then
+							if not (character and root and humanoid and humanoid.Health > 0) then
 								return
 							end
 
-							-- DESYNC CAMERA: the real Position Desync feature (tbl8.Desync/tbl12.SetDesync), the
-							-- same one every other teleport uses - NOT a custom RenderStep CFrame-freeze. That
-							-- custom freeze was fighting the actual sit/kill below (it kept yanking our real root
-							-- back to the old position every render frame, which is a world away from where the
-							-- blob is), which is almost certainly why the kill never took. Desync only delays what
-							-- the server sees of our position - it doesn't touch our own CFrame, so it doesn't
-							-- fight anything we do locally.
-							local desyncWasOn = tbl8.Desync
-							tbl12.SetDesync(true)
+							-- DESYNC CAMERA (same trick as the teleports / SNO / SpawnToy): the camera and our own view stay at
+							-- homeCF, the real body sits at the blob so the server can spawn/seat us there.
+							local homeCF = root.CFrame
+							local atCF = seatlessBlobPos * CFrame.new(0, 3, 12)
+							local hideConn = nil
+							pcall(function()
+								RunService:BindToRenderStep("RSCSeatless", Enum.RenderPriority.Camera.Value - 1, function()
+									if root.Parent then
+										root.CFrame = homeCF
+									end
+								end)
+							end)
+							hideConn = RunService.Heartbeat:Connect(function()
+								if root.Parent then
+									root.CFrame = atCF
+									root.AssemblyLinearVelocity = Vector3.zero
+									root.AssemblyAngularVelocity = Vector3.zero
+								end
+							end)
+
+							local function unhide(restore)
+								pcall(function()
+									RunService:UnbindFromRenderStep("RSCSeatless")
+								end)
+								if hideConn then
+									hideConn:Disconnect()
+									hideConn = nil
+								end
+								if restore and root.Parent then
+									root.CFrame = homeCF
+								end
+							end
+
+							task.wait(0.15) -- let the server see us at the spot before asking for the spawn
+
+							-- 1. SPAWN, right where we're standing
+							local blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
+							local blobHRP = blob and (blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1))
+							if not blobHRP then
+								if blob then
+									tbl12.DestroyToy(blob)
+								end
+								unhide(true)
+								return
+							end
+							if runId ~= seatlessRunId then
+								tbl12.DestroyToy(blob)
+								unhide(true)
+								return
+							end
+							tbl7.SeatlessBlobModel = blob
 
 							-- 2. SIT
 							pcall(blobHRP.Sit, blobHRP, humanoid)
 							task.wait(0.1)
-
 							if runId ~= seatlessRunId or not blobHRP.Parent then
-								if not desyncWasOn then
-									tbl12.SetDesync(false)
-								end
+								unhide(true)
 								return
 							end
 
@@ -25999,124 +26107,95 @@ end
 								humanoid.Jump = true
 							end)
 							task.wait(0.1)
-
 							if runId ~= seatlessRunId or flag11 or not blobHRP.Parent then
-								if not desyncWasOn then
-									tbl12.SetDesync(false)
-								end
+								unhide(true)
 								return
 							end
 
-							-- 4. RUN THE CODE - ported verbatim from the Inicio() script (same tick()-based timing,
-							-- no extra guard before the kill): kill, then spam-sit the SAME humanoid/root for 4
-							-- seconds straight - never wait for a respawn, the corpse getting seated is what
-							-- actually makes this work.
+							-- 4. RUN THE CODE - ported verbatim from Inicio() (tick()-based, no extra guard before kill)
 							local t = tick()
 							local ragdollFired = false
-
 							humanoid.Health = 0
 							task.wait(1)
-
 							while tick() - t < 4 do
 								RunService.Heartbeat:Wait()
 								humanoid.EvaluateStateMachine = false
 								humanoid.BreakJointsOnDeath = false
-
 								if not ragdollFired then
 									pcall(function()
 										tbl11.RagdollRemote:FireServer(root, math.huge)
 									end)
 									ragdollFired = true
 								end
-
 								if not humanoid.SeatPart then
 									humanoid.Sit = false
 								end
-
 								pcall(blobHRP.Sit, blobHRP, humanoid)
 								pcall(function()
 									local prompt = blobHRP:FindFirstChild("ProximityPrompt") or blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
-
 									if prompt then
 										fireproximityprompt(prompt)
 									end
 								end)
-
 								humanoid.EvaluateStateMachine = true
 							end
 
 							local success = false
 							local startTime = tick()
-
 							while tick() - startTime < 5 do
 								task.wait()
-
 								local occupant = blobHRP.Occupant
 								local _, _, ourHumanoid = tbl12.Char()
-
 								if occupant and (occupant == humanoid or occupant == ourHumanoid) then
 									success = true
 									break
 								end
-
 								local seatWeld = blobHRP:FindFirstChild("SeatWeld")
-
 								if seatWeld and seatWeld.Part1 and (seatWeld.Part1 == root or (ourHumanoid and seatWeld.Part1.Parent and seatWeld.Part1.Parent:FindFirstChildOfClass("Humanoid") == ourHumanoid)) then
 									success = true
 									break
 								end
 							end
 
-							-- 5. ANCHOR THE HRP - only now that we're legitimately seated
-							if success and runId == seatlessRunId and blobHRP.Parent then
-								blobHRP.Anchored = true
-							end
-
-							if not desyncWasOn then
-								tbl12.SetDesync(false)
-							end
-
 							if runId ~= seatlessRunId then
+								unhide(false)
 								return
 							end
 
-							-- Blobman features (Kick/Kill/etc) read the shared `parent` upvalue, normally kept in
-							-- sync by Humanoid.Seated - which doesn't reliably fire for this forced a seat. Set it
-							-- directly, then keep re-asserting it for as long as we're actually the occupant.
+							-- 5. ANCHOR THE HRP - only now that we're legitimately seated, exactly on its spot
+							if success and blobHRP.Parent then
+								tbl7.SeatlessParkCF = seatlessBlobPos
+								tbl12.SeatlessParkBlob()
+								tbl7.SeatlessActive = true
+							end
+							unhide(not success)
+							if not success then
+								tbl12.DestroyToy(blob)
+								tbl7.SeatlessBlobModel = nil
+							end
+
+							-- parent upvalue fix (Blobman features): the Humanoid.Seated signal doesn't reliably fire for
+							-- a seat taken like this, so it's set directly and kept set.
 							if success then
 								parent = blob
-
 								task.spawn(function()
-									while blob.Parent and tbl7.SeatlessBlobModel == blob and tbl8.SeatlessBlob do
-										local occupant = blobHRP.Occupant
-										local _, _, ourHumanoid = tbl12.Char()
-
-										if occupant and (occupant == humanoid or occupant == ourHumanoid) then
-											parent = blob
-										end
-
-										task.wait(0.5)
+									while blob.Parent and tbl7.SeatlessBlobModel == blob and tbl8.SeatlessBlob and runId == seatlessRunId do
+										parent = blob
+										task.wait(0.25)
 									end
 								end)
 							end
 
-							-- Kick/Kill/etc actually fire through tbl14.GetBlobmanComponents, which reads
-							-- BlobmanSeatAndOwnerScript/RightDetector/RightWeld off `parent` - the server only
-							-- creates those a moment after it sees a real Occupant, so wait for them here instead
-							-- of declaring ready the instant the seat itself takes.
+							-- wait for the server-side Blobman remote components to appear
 							local componentsReady = false
-
 							if success then
 								local readyStarted = os.clock()
-
 								while os.clock() - readyStarted < 3 and runId == seatlessRunId and blob.Parent do
 									local components = tbl14.GetBlobmanComponents and tbl14.GetBlobmanComponents()
-
 									if components and components.CreatureGrab and components.RightWeld then
 										componentsReady = true
 										break
 									end
-
 									task.wait()
 								end
 							end
@@ -26125,7 +26204,7 @@ end
 								pcall(function()
 									lib:Notify({
 										Title = "Resonance",
-										Description = "Seatless Blob: " .. (success and "seated" or "failed to seat") .. " - Anchored: " .. tostring(blobHRP.Anchored) .. " - Blobman remotes: " .. (not success and "n/a" or componentsReady and "ready" or "not ready yet"),
+										Description = "Seatless Blob: " .. (success and "seated" or "failed to seat") .. " - Anchored: " .. tostring(success and blobHRP.Anchored or false) .. " - Blobman remotes: " .. (not success and "n/a" or componentsReady and "ready" or "not ready yet"),
 										IconColor = Color3.new(1, 1, 1),
 									})
 								end)
@@ -30711,6 +30790,7 @@ end
 				if v24 then
 					v24.CFrame = cframe
 				end
+				tbl12.ReturnPCLD()
 			end
 
 			if tbl12.GetMagnitude(workspace.SpawnLocation, v27) < 15000 then
@@ -31148,7 +31228,7 @@ end
 				return
 			end
 			local v22, v23, v24 = tbl12.Char()
-			if not (v23 and v24 and v24.SeatPart) then
+			if not (v23 and v24 and (v24.SeatPart or tbl7.SeatlessActive)) then
 				return
 			end
 			local v25, v26, v27 = tbl12.Char(arg)
@@ -31196,7 +31276,7 @@ end
 				task.wait(0.06)
 				rootAttachment.Parent = v25
 
-				while arg.Parent and v26.Parent and v27.Parent and v27.Health > 0 and parent and parent.Parent and tbl7.SelectedPlayersBlob[arg] and tbl8.LoopApplyMethod and tbl9.BlobMethod == "Kick" and tbl12.GetMagnitude(v23, v26) <= 41 and not v27.SeatPart and v24.Sit do
+				while arg.Parent and v26.Parent and v27.Parent and v27.Health > 0 and parent and parent.Parent and tbl7.SelectedPlayersBlob[arg] and tbl8.LoopApplyMethod and tbl9.BlobMethod == "Kick" and tbl12.GetMagnitude(v23, v26) <= 41 and not v27.SeatPart and (v24.Sit or tbl7.SeatlessActive) do
 					task.spawn(function()
 						v27.RequiresNeck = false
 						tbl12.ToggleMotor6D(v25, false, true)
@@ -31286,6 +31366,25 @@ end
 
 				if leftWeld then
 					leftWeld.Enabled = true
+				end
+			end
+		end
+
+		-- Seatless Blob: every Blobman feature runs with the blob unanchored + glued to us (see SeatlessBegin/End)
+		for _, name in ipairs({ "Grab", "Release", "Bring", "Kill", "RemoveGucci", "Lock", "Follow", "LoopKick", "LoopLock", "Kick", "KickTargets" }) do
+			local orig = tbl14[name]
+
+			if orig then
+				tbl14[name] = function(...)
+					tbl12.SeatlessBegin()
+					local res = table.pack(pcall(orig, ...))
+					tbl12.SeatlessEnd()
+
+					if not res[1] then
+						error(res[2], 0)
+					end
+
+					return table.unpack(res, 2, res.n)
 				end
 			end
 		end
@@ -32679,7 +32778,9 @@ end
 					if arg and arg2 and arg2.Parent and (arg2.Parent.Name == "CreatureBlobman" or arg2.Parent == tbl7.SeatlessBlobModel) then
 						parent = arg2.Parent
 					else
-						parent = nil
+						-- Seatless Blob keeps `parent` on its blob even though our (new) body isn't on it
+						local seatless = tbl7.SeatlessActive and tbl7.SeatlessBlobModel
+						parent = seatless and seatless.Parent and seatless or nil
 					end
 				end)
 			end
@@ -35756,7 +35857,9 @@ Escape Timer: %*]]
 			local tbl16 = {}
 
 			local function fn21(arg, arg2)
-				if not arg or not tbl8.EKI then
+				-- releasing (arg2 == nil) must ALWAYS go through, even after EKI got toggled off - otherwise the PCLD
+				-- we claimed stays stuck on his root and is never handed back.
+				if not arg or (arg2 and not tbl8.EKI) then
 					return
 				end
 
@@ -35788,9 +35891,8 @@ Escape Timer: %*]]
 						weldHRP.Enabled = true
 					end
 
-					if tbl12.IsNetworkOwner(v23) then
-						fn21(v23, nil)
-					end
+					-- always hand the PCLD back (not only while we still own him)
+					fn21(v23, nil)
 				end
 
 				if v22 then
@@ -35863,7 +35965,8 @@ Escape Timer: %*]]
 				-- effectively never arm. Still never claim it while the target is above us.
 				if tbl12.IsNetworkOwner(root) then
 					local _, ourRoot = tbl12.Char()
-					local targetAboveUs = ourRoot and root.Position.Y > ourRoot.Position.Y
+					-- the kick hold itself parks him NKOffset above us, so "over us" = clearly higher than that
+					local targetAboveUs = ourRoot and root.Position.Y > ourRoot.Position.Y + (tonumber(tbl9.NKOffset) or 0) + 6
 
 					if not targetAboveUs and fn21(root, root) then
 						st.ekiOn, st.root, st.checkAt = true, root, os.clock()
