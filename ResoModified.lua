@@ -19285,13 +19285,15 @@ do
 							flag12 = true
 						end
 
-						-- a rigid AlignPosition/AlignOrientation "weld" was tried here, but it fights the RenderStep
-						-- snap-back right below it: that snap-back forcibly puts our HRP back at the hidden/old
-						-- CFrame every render frame to hide the teleport, while the rigid constraint is simultaneously
-						-- forcing it back to the real target every physics step - two competing CFrame writers on the
-						-- same part every frame, which is exactly what was "bugging a lot" instead of holding still.
-						-- Back to the plain per-Heartbeat CFrame write; only the collision-drop (which has nothing to
-						-- do with the weld itself) is kept, since fewer physics collisions at the far end still helps.
+						-- WELD, the same trick as Weld.txt: a rigid AlignPosition/AlignOrientation constraint fights the
+						-- RenderStep snap-back right below it (that snap-back forcibly puts our HRP back at the
+						-- hidden/old CFrame every render frame to hide the teleport, while a rigid constraint is
+						-- simultaneously forcing it back to the real target every physics step - two competing CFrame
+						-- writers on the same part, which is what was "bugging a lot"), so no AlignPosition is used.
+						-- Instead the Heartbeat write below zeroes residual velocity and self-claims PhysicsRepRootPart
+						-- (the exact sethiddenproperty(Root, "PhysicsRepRootPart", Part) trick from Weld.txt, just
+						-- pointed at ourselves) so the engine treats our own rapid repositioning as locally-driven
+						-- instead of fighting it with replication corrections.
 
 						local flag13 = arg.Name == "HumanoidRootPart" or arg.Name == "Torso"
 						local v27 = nil
@@ -19338,6 +19340,9 @@ do
 								cframe = head.CFrame
 								v25.CFrame = cframe3
 								head.CFrame = cframe3
+								v25.AssemblyLinearVelocity = Vector3.zero
+								v25.AssemblyAngularVelocity = Vector3.zero
+								pcall(sethiddenproperty, v25, "PhysicsRepRootPart", v25)
 							end)
 						end
 
@@ -19350,6 +19355,7 @@ do
 							end
 
 							pcall(tbl12.ToggleCollisions, v24, true)
+							pcall(sethiddenproperty, v25, "PhysicsRepRootPart", nil)
 							head.CFrame = cframe
 							v25.CFrame = cframe2
 						end
@@ -25870,32 +25876,39 @@ end
 						end
 					end
 
-					-- SEATLESS BLOB, in order: (1) spawn the Blobman at a fixed, far-away world position, (2) sit on it
-					-- normally while it's still unanchored and welds like any other toy, (3) jump, to prove we can
-					-- still get in/out before anything is locked down, (4) THEN anchor its VehicleSeat (its "HRP")
-					-- - which immediately kicks us back out, so (5) run the kill -> ragdoll -> spam Sit/fireproximityprompt
-					-- code to force the seat to take anyway, the same trick an anchored seat needs since it rejects a
-					-- normal sit. Off just deletes the blob again.
+					-- SEATLESS BLOB, in order: (1) spawn the Blobman at a fixed, far-away world position and wait for
+					-- it to actually be there, (2) sit on it normally while it's still unanchored and welds like any
+					-- other toy, (3) jump, to prove we can still get in/out before anything is locked down, (4) THEN
+					-- anchor its VehicleSeat (its "HRP") - which immediately kicks us back out, so (5) run the real
+					-- target-kill (the same one tbl12.Kill uses) -> ragdoll -> spam Sit/fireproximityprompt code to
+					-- force the seat to take anyway, the same trick an anchored seat needs since it rejects a normal
+					-- sit. Kept unnamed so the normal Blobman features (Kick/Kill/etc, which key off sitting on a
+					-- model literally named "CreatureBlobman") still work while this is active. If the blob gets
+					-- deleted or someone else sits on it afterwards, the whole sequence is re-run automatically.
+					-- Off just deletes the blob again.
+					local seatlessBlobPos = CFrame.new(283300, 2147483647, -5705000)
+					local seatlessRunId = 0
+
 					tbl12.SeatlessBlob = function(enable)
 						if tbl7.SeatlessBlobModel and tbl7.SeatlessBlobModel.Parent then
 							tbl12.DestroyToy(tbl7.SeatlessBlobModel)
 						end
 						tbl7.SeatlessBlobModel = nil
+						seatlessRunId += 1
 
 						if not enable then
 							return
 						end
 
+						local runId = seatlessRunId
+
 						-- 1. SPAWN
-						local blob = tbl12.SpawnToy("CreatureBlobman", CFrame.new(283300, 0, -5705000))
+						local blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
 
 						if not blob then
 							return
 						end
 
-						-- renamed so the normal Blobman features (Sit on Blobman / Blob Kick Player / Auto Sit
-						-- Blobman, all of which look up a toy named "CreatureBlobman") never find and reuse this one
-						blob.Name = "SeatlessBlobman"
 						local blobHRP = blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1)
 
 						if not blobHRP then
@@ -25909,6 +25922,17 @@ end
 							local character, root, humanoid = tbl12.Char()
 
 							if not (character and root and humanoid) then
+								return
+							end
+
+							-- WAIT FOR THE BLOBMAN TO BE AT ITS PLACE before touching it at all
+							local arrivedAt = os.clock()
+
+							while os.clock() - arrivedAt < 2 and blobHRP.Parent and (blobHRP.Position - seatlessBlobPos.Position).Magnitude > 4 do
+								task.wait()
+							end
+
+							if runId ~= seatlessRunId or not blobHRP.Parent then
 								return
 							end
 
@@ -25935,28 +25959,29 @@ end
 
 							-- 2. SIT, 3. JUMP, 4. ANCHOR
 							pcall(blobHRP.Sit, blobHRP, humanoid)
-							task.wait(0.005)
+							task.wait(0.1)
 							pcall(function()
 								humanoid.Jump = true
 							end)
-							task.wait(0.005)
+							task.wait(0.1)
 
-							if not (tbl8.SeatlessBlob and blobHRP.Parent) then
+							if runId ~= seatlessRunId or not blobHRP.Parent then
 								reveal()
 								return
 							end
 
 							blobHRP.Anchored = true
-							task.wait(0.005)
+							task.wait(0.1)
 
-							if flag11 or not tbl8.SeatlessBlob then
+							if runId ~= seatlessRunId or flag11 or not blobHRP.Parent then
 								reveal()
 								return
 							end
 
-							-- 5. RUN THE CODE: an anchored seat rejects a normal sit, so kill -> ragdoll -> respawn
-							-- and spam Sit/fireproximityprompt on the fresh character until the seat actually takes.
-							humanoid.Health = 0
+							-- 5. RUN THE CODE: an anchored seat rejects a normal sit, so kill (the same target-kill
+							-- tbl12.Kill fires on other players) -> ragdoll -> respawn and spam Sit/fireproximityprompt
+							-- on the fresh character until the seat actually takes.
+							humanoid.BreakJointsOnDeath = false
 							pcall(function()
 								humanoid:ChangeState(Enum.HumanoidStateType.Dead)
 							end)
@@ -25967,18 +25992,18 @@ end
 
 							local success = false
 
-							if newHumanoid and newRoot and blobHRP.Parent then
+							if newHumanoid and newRoot and blobHRP.Parent and runId == seatlessRunId then
 								pcall(function()
 									tbl11.RagdollRemote:FireServer(newRoot, 0.15)
 								end)
-								task.wait(0.005)
+								task.wait(0.1)
 								pcall(function()
 									tbl11.RagdollRemote:FireServer(newRoot, 0)
 								end)
 
 								local started = os.clock()
 
-								while os.clock() - started < 3 and not flag11 and tbl8.SeatlessBlob and blobHRP.Parent do
+								while os.clock() - started < 3 and not flag11 and runId == seatlessRunId and blobHRP.Parent do
 									pcall(tbl12.Teleport, newRoot, blobHRP.CFrame * CFrame.new(0, 2, 0))
 
 									if not newHumanoid.SeatPart then
@@ -25999,19 +26024,53 @@ end
 										break
 									end
 
-									task.wait(0.005)
+									task.wait(0.1)
 								end
 							end
 
 							reveal()
 
-							if not (flag11 or not tbl8.SeatlessBlob) then
+							if runId ~= seatlessRunId then
+								return
+							end
+
+							if not flag11 then
 								pcall(function()
 									lib:Notify({
 										Title = "Resonance",
 										Description = "Seatless Blob: " .. (success and "seated" or "failed to seat") .. " - Anchored: " .. tostring(blobHRP.Anchored),
 										IconColor = Color3.new(1, 1, 1),
 									})
+								end)
+							end
+
+							-- WATCHDOG: if the blob gets deleted, or somebody else sits on it, re-run the whole
+							-- sequence from scratch (fresh spawn) as long as the toggle is still on.
+							if success and not flag11 and tbl8.SeatlessBlob and runId == seatlessRunId then
+								local function retrigger()
+									if tbl8.SeatlessBlob and runId == seatlessRunId then
+										task.spawn(tbl12.SeatlessBlob, true)
+									end
+								end
+
+								local ancestryConn
+								ancestryConn = blob.AncestryChanged:Connect(function(_, parent)
+									if not parent then
+										ancestryConn:Disconnect()
+										retrigger()
+									end
+								end)
+
+								local occupantConn
+								occupantConn = blobHRP:GetPropertyChangedSignal("Occupant"):Connect(function()
+									local occupant = blobHRP.Occupant
+									local _, _, ourHumanoid = tbl12.Char()
+
+									if occupant and occupant ~= ourHumanoid then
+										occupantConn:Disconnect()
+										ancestryConn:Disconnect()
+										retrigger()
+									end
 								end)
 							end
 						end)
@@ -35701,7 +35760,7 @@ Escape Timer: %*]]
 						fn21(st.root, nil)
 						st.ekiOn, st.root = false, nil
 					end
-					st.armedAt, st.lostAt = nil, nil
+					st.armedAt, st.lostAt, st.ownedSince = nil, nil, nil
 					return
 				end
 
@@ -35727,10 +35786,21 @@ Escape Timer: %*]]
 					return
 				end
 
-				-- EKI Delay removed: the instant the engine says we simulate his root, claim the PhysicsRepRootPart, no wait.
+				-- don't claim EKI the instant ownership flips - only after we've held it for 0.4s straight
+				-- (a brief flicker of ownership no longer arms it), and never while the target is above us.
 				if tbl12.IsNetworkOwner(root) then
+					st.ownedSince = st.ownedSince or os.clock()
+				else
+					st.ownedSince = nil
+				end
+
+				local _, ourRoot = tbl12.Char()
+				local targetAboveUs = ourRoot and root.Position.Y > ourRoot.Position.Y
+
+				if st.ownedSince and os.clock() - st.ownedSince >= 0.4 and not targetAboveUs then
 					if fn21(root, root) then
 						st.ekiOn, st.root, st.checkAt = true, root, os.clock()
+						st.ownedSince = nil
 					end
 				end
 			end
