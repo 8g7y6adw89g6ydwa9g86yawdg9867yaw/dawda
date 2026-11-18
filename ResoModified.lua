@@ -25906,23 +25906,25 @@ end
 						tbl7.SeatlessBlobModel = blob
 
 						task.spawn(function()
-							local oldCharacter, root, humanoid = tbl12.Char()
+							local character, root, humanoid = tbl12.Char()
 
-							if not (oldCharacter and root and humanoid) then
+							if not (character and root and humanoid) then
 								return
 							end
 
-							-- CAMERA DESYNC: the exact same hidden-teleport trick SNO uses - our HRP/Head are forced back
-							-- to where we actually are, every render frame, while whatever happens below (sit attempts,
-							-- the teleport-and-reclaim loop) runs for real underneath. None of that process is visible;
-							-- the camera only catches up once we're actually seated (or we give up).
-							local head = oldCharacter:FindFirstChild("Head")
+							-- CAMERA DESYNC ONLY (no Position Desync): the exact same hidden-teleport trick SNO uses
+							-- - our HRP/Head are forced back to where we actually are, every render frame, so none
+							-- of the sit/jump/anchor/kill process below is ever shown. The camera only catches up
+							-- once we're actually seated (or we give up).
+							local head = character:FindFirstChild("Head")
 							local hideCFrame = root.CFrame
 							local hideHeadCFrame = head and head.CFrame
 
 							RunService:BindToRenderStep("RSCSeatless", Enum.RenderPriority.Camera.Value - 1, function()
-								root.CFrame = hideCFrame
-								if head then
+								if root and root.Parent then
+									root.CFrame = hideCFrame
+								end
+								if head and head.Parent then
 									head.CFrame = hideHeadCFrame
 								end
 							end)
@@ -25931,11 +25933,13 @@ end
 								pcall(RunService.UnbindFromRenderStep, RunService, "RSCSeatless")
 							end
 
-							-- 2. SIT, 3. JUMP, 4. ANCHOR - 0 delay, back to back
+							-- 2. SIT, 3. JUMP, 4. ANCHOR
 							pcall(blobHRP.Sit, blobHRP, humanoid)
+							task.wait(0.005)
 							pcall(function()
 								humanoid.Jump = true
 							end)
+							task.wait(0.005)
 
 							if not (tbl8.SeatlessBlob and blobHRP.Parent) then
 								reveal()
@@ -25943,42 +25947,60 @@ end
 							end
 
 							blobHRP.Anchored = true
+							task.wait(0.005)
 
-							-- 5. RUN THE CODE: Position Desync instead of the old kill -> respawn -> ragdoll loop (that
-							-- was the slow part - up to ~10s start to finish). Desync stalls what the server sees of our
-							-- position for a moment, which is enough room to teleport straight onto the now-anchored,
-							-- far-away seat and have the sit actually take, with no fake death needed.
-							local desyncWasOn = tbl8.Desync
-							tbl12.SetDesync(true)
-
-							local success = false
-							local started = os.clock()
-
-							while os.clock() - started < 1.5 and not flag11 and tbl8.SeatlessBlob do
-								RunService.Heartbeat:Wait()
-								pcall(tbl12.Teleport, root, blobHRP.CFrame * CFrame.new(0, 2, 0))
-
-								if not humanoid.SeatPart then
-									humanoid.Sit = false
-								end
-
-								pcall(blobHRP.Sit, blobHRP, humanoid)
-								pcall(function()
-									local prompt = blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
-
-									if prompt then
-										fireproximityprompt(prompt)
-									end
-								end)
-
-								if humanoid.SeatPart == blobHRP then
-									success = true
-									break
-								end
+							if flag11 or not tbl8.SeatlessBlob then
+								reveal()
+								return
 							end
 
-							if not desyncWasOn then
-								tbl12.SetDesync(false)
+							-- 5. RUN THE CODE: an anchored seat rejects a normal sit, so kill -> ragdoll -> respawn
+							-- and spam Sit/fireproximityprompt on the fresh character until the seat actually takes.
+							humanoid.Health = 0
+							pcall(function()
+								humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+							end)
+
+							local newCharacter = localPlayer.CharacterAdded:Wait()
+							local newHumanoid = newCharacter:WaitForChild("Humanoid", 5)
+							local newRoot = newCharacter:WaitForChild("HumanoidRootPart", 5)
+
+							local success = false
+
+							if newHumanoid and newRoot and blobHRP.Parent then
+								pcall(function()
+									tbl11.RagdollRemote:FireServer(newRoot, 0.15)
+								end)
+								task.wait(0.005)
+								pcall(function()
+									tbl11.RagdollRemote:FireServer(newRoot, 0)
+								end)
+
+								local started = os.clock()
+
+								while os.clock() - started < 3 and not flag11 and tbl8.SeatlessBlob and blobHRP.Parent do
+									pcall(tbl12.Teleport, newRoot, blobHRP.CFrame * CFrame.new(0, 2, 0))
+
+									if not newHumanoid.SeatPart then
+										newHumanoid.Sit = false
+									end
+
+									pcall(blobHRP.Sit, blobHRP, newHumanoid)
+									pcall(function()
+										local prompt = blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
+
+										if prompt then
+											fireproximityprompt(prompt)
+										end
+									end)
+
+									if newHumanoid.SeatPart == blobHRP then
+										success = true
+										break
+									end
+
+									task.wait(0.005)
+								end
 							end
 
 							reveal()
