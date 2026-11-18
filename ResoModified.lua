@@ -30778,9 +30778,9 @@ end
 							end
 
 							-- lower CreatureGrab/CreatureRelease rate by 0.0004s - firing them that fast may be why holds drop
-							task.wait(0.011111111111111112)
+							task.wait(0.010361111111111112)
 							v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
-							task.wait(0.011111111111111112)
+							task.wait(0.010361111111111112)
 							v22.CreatureRelease:FireServer(v22.RightWeld)
 							continue
 						end
@@ -30854,11 +30854,24 @@ end
 				local cFrame2 = v24.CFrame * CFrame.Angles(0, i / #tbl16 * 3.1415926535897931 * 2, 0) * CFrame.new(0, 5, -20)
 				v26.CFrame = cFrame2
 				tbl12.Teleport(v26.Root, cFrame2)
-				local v27, v28 = tbl12.CreateAlign(v26.Root, true)
 				local position = cFrame2.Position
 				local cFrame3 = cFrame2 - cFrame2.Position
+
+				-- COMPLETELY STABLE HOLD: the same BodyPosition+BodyGyro hold the generic (non-Blob) Kick
+				-- uses ("KickAP"/"KickAO"), not AlignPosition/AlignOrientation - just a tiny bit stronger
+				-- than its stock D.
+				local v27 = Instance.new("BodyPosition")
+				local v28 = Instance.new("BodyGyro")
+				v27.D = 220
+				v27.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 				v27.Position = position
+				v27.Parent = v26.Root
+				v27.Name = "BlobKickAP"
+				v28.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+				v28.D = 220
 				v28.CFrame = cFrame3
+				v28.Parent = v26.Root
+				v28.Name = "BlobKickAO"
 				local n36 = #tbl17 + 1
 				local n37 = #tbl17 + 2
 				tbl17[n36] = v27
@@ -31257,8 +31270,22 @@ end
 
 				local n36 = v23.CFrame * CFrame.new(options.BlobKickX.Value, options.BlobKickY.Value, options.BlobKickZ.Value)
 				tbl12.Teleport(v26, n36)
-				local v29, v30 = tbl12.CreateAlign(v26, true)
+
+				-- COMPLETELY STABLE HOLD: the same BodyPosition+BodyGyro hold the generic (non-Blob) Kick
+				-- uses ("KickAP"/"KickAO"), not AlignPosition/AlignOrientation - just a tiny bit stronger
+				-- than its stock D.
+				local v29 = Instance.new("BodyPosition")
+				local v30 = Instance.new("BodyGyro")
+				v29.D = 220
+				v29.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 				v29.Position = n36.Position
+				v29.Parent = v26
+				v29.Name = "BlobKickAP"
+				v30.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+				v30.D = 220
+				v30.CFrame = CFrame.new()
+				v30.Parent = v26
+				v30.Name = "BlobKickAO"
 
 				task.delay(0.2, function()
 					tbl12.Grab(v26)
@@ -31309,9 +31336,9 @@ end
 					-- lower the Blobman Kick remotes rate by 0.0004s (fewer CreatureGrab/CreatureDrop/CreatureRelease per second)
 					if tbl9.BKMethod == 1 then
 						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait(0.0171)
+						task.wait(0.01635)
 						v28.CreatureDrop:FireServer(v28.RightWeld)
-						task.wait(0.0171)
+						task.wait(0.01635)
 
 						if tbl8.NetworkOwnerInKick then
 							tbl12.Grab(v26)
@@ -31319,7 +31346,7 @@ end
 						end
 					else
 						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait(0.0171)
+						task.wait(0.01635)
 						v28.CreatureRelease:FireServer(v28.RightWeld)
 						tbl12.Grab(v26)
 						task.spawn(tbl12.Ragdoll, v25)
@@ -31328,7 +31355,7 @@ end
 							tbl12.RNO(v26)
 						end
 
-						task.wait(0.0171)
+						task.wait(0.01635)
 					end
 				end
 
