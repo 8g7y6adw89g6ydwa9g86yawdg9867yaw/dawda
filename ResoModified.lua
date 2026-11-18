@@ -30777,10 +30777,10 @@ end
 								cframe2 = v29 - Vector3.new(0, 15, 0)
 							end
 
-							-- -0.0004s on both waits to send these a little more often
-							task.wait(0.010711111111111112)
+							-- lower CreatureGrab/CreatureRelease rate by 0.0004s - firing them that fast may be why holds drop
+							task.wait(0.011111111111111112)
 							v22.CreatureGrab:FireServer(nil, v27, v22.RightWeld)
-							task.wait(0.010711111111111112)
+							task.wait(0.011111111111111112)
 							v22.CreatureRelease:FireServer(v22.RightWeld)
 							continue
 						end
@@ -31306,11 +31306,12 @@ end
 						task.spawn(tbl12.RemoveSticky, v25)
 					end
 
+					-- lower the Blobman Kick remotes rate by 0.0004s (fewer CreatureGrab/CreatureDrop/CreatureRelease per second)
 					if tbl9.BKMethod == 1 then
 						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait()
+						task.wait(0.0171)
 						v28.CreatureDrop:FireServer(v28.RightWeld)
-						task.wait()
+						task.wait(0.0171)
 
 						if tbl8.NetworkOwnerInKick then
 							tbl12.Grab(v26)
@@ -31318,7 +31319,7 @@ end
 						end
 					else
 						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait()
+						task.wait(0.0171)
 						v28.CreatureRelease:FireServer(v28.RightWeld)
 						tbl12.Grab(v26)
 						task.spawn(tbl12.Ragdoll, v25)
@@ -31327,7 +31328,7 @@ end
 							tbl12.RNO(v26)
 						end
 
-						task.wait()
+						task.wait(0.0171)
 					end
 				end
 
@@ -36102,8 +36103,8 @@ Escape Timer: %*]]
 											-- SETOWNER 1.2x FASTER THAN DESTROYLINE: both now fire on their own clock (not a single delayed RNO or an
 											-- every-frame Grab), with the destroyline interval always 1.2x the setowner interval, in real seconds so the
 											-- ratio holds regardless of fps. "Faster but worse" just uses a smaller base (more remotes/sec, same 1.2x
-											-- ratio); -0.0004s on both bases to send setowners a little more often, not less.
-											local nkBase = (tbl9.NKDelayMode == "Faster but worse") and 0.0076 or 0.0116
+											-- ratio); lower setowner rate by 0.0003s on both bases.
+											local nkBase = (tbl9.NKDelayMode == "Faster but worse") and 0.0079 or 0.0119
 											local nkPingLv = tbl12.PingLevel()
 
 											if nkPingLv >= 2 then
@@ -36140,8 +36141,8 @@ Escape Timer: %*]]
 											st.alphaFired = false
 											tbl12.Teleport(v27, v29)
 											-- the weld/claim phase (far away, teleport + setowner): faster base than the in-range phase, since
-											-- this is purely about getting ownership established as quickly as possible; -0.0004s, same as above
-											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.0046 or 0.0076
+											-- this is purely about getting ownership established as quickly as possible; lower setowner rate by 0.0003s, same as above
+											local nkBase2 = (tbl9.NKDelayMode == "Faster but worse") and 0.0049 or 0.0079
 											local nkPingLv2 = tbl12.PingLevel()
 
 											if nkPingLv2 >= 2 then
