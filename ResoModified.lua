@@ -25973,33 +25973,24 @@ end
 								return
 							end
 
-							-- CAMERA DESYNC ONLY (no Position Desync): the exact same hidden-teleport trick SNO uses
-							-- - our HRP/Head are forced back to where we actually are, every render frame, so none
-							-- of the sit/jump/kill process below is ever shown. The camera only catches up once
-							-- we're actually seated (or we give up).
-							local head = character:FindFirstChild("Head")
-							local hideCFrame = root.CFrame
-							local hideHeadCFrame = head and head.CFrame
-
-							RunService:BindToRenderStep("RSCSeatless", Enum.RenderPriority.Camera.Value - 1, function()
-								if root and root.Parent then
-									root.CFrame = hideCFrame
-								end
-								if head and head.Parent then
-									head.CFrame = hideHeadCFrame
-								end
-							end)
-
-							local function reveal()
-								pcall(RunService.UnbindFromRenderStep, RunService, "RSCSeatless")
-							end
+							-- DESYNC CAMERA: the real Position Desync feature (tbl8.Desync/tbl12.SetDesync), the
+							-- same one every other teleport uses - NOT a custom RenderStep CFrame-freeze. That
+							-- custom freeze was fighting the actual sit/kill below (it kept yanking our real root
+							-- back to the old position every render frame, which is a world away from where the
+							-- blob is), which is almost certainly why the kill never took. Desync only delays what
+							-- the server sees of our position - it doesn't touch our own CFrame, so it doesn't
+							-- fight anything we do locally.
+							local desyncWasOn = tbl8.Desync
+							tbl12.SetDesync(true)
 
 							-- 2. SIT
 							pcall(blobHRP.Sit, blobHRP, humanoid)
 							task.wait(0.1)
 
 							if runId ~= seatlessRunId or not blobHRP.Parent then
-								reveal()
+								if not desyncWasOn then
+									tbl12.SetDesync(false)
+								end
 								return
 							end
 
@@ -26010,53 +26001,54 @@ end
 							task.wait(0.1)
 
 							if runId ~= seatlessRunId or flag11 or not blobHRP.Parent then
-								reveal()
+								if not desyncWasOn then
+									tbl12.SetDesync(false)
+								end
 								return
 							end
 
-							-- 4. RUN THE CODE (ported from Inicio()): kill, then spam-sit the SAME humanoid/root -
-							-- never wait for a respawn, the corpse getting seated is what actually makes this work.
+							-- 4. RUN THE CODE - ported verbatim from the Inicio() script (same tick()-based timing,
+							-- no extra guard before the kill): kill, then spam-sit the SAME humanoid/root for 4
+							-- seconds straight - never wait for a respawn, the corpse getting seated is what
+							-- actually makes this work.
+							local t = tick()
 							local ragdollFired = false
 
-							if not (blobHRP.Occupant and blobHRP.Occupant.Parent and blobHRP.Occupant.Parent.Name == localPlayer.Name) then
-								humanoid.Health = 0
-								task.wait(1)
+							humanoid.Health = 0
+							task.wait(1)
 
-								local spamStarted = os.clock()
+							while tick() - t < 4 do
+								RunService.Heartbeat:Wait()
+								humanoid.EvaluateStateMachine = false
+								humanoid.BreakJointsOnDeath = false
 
-								while os.clock() - spamStarted < 4 and runId == seatlessRunId and blobHRP.Parent do
-									RunService.Heartbeat:Wait()
-									humanoid.EvaluateStateMachine = false
-									humanoid.BreakJointsOnDeath = false
-
-									if not ragdollFired then
-										pcall(function()
-											tbl11.RagdollRemote:FireServer(root, math.huge)
-										end)
-										ragdollFired = true
-									end
-
-									if not humanoid.SeatPart then
-										humanoid.Sit = false
-									end
-
-									pcall(blobHRP.Sit, blobHRP, humanoid)
+								if not ragdollFired then
 									pcall(function()
-										local prompt = blobHRP:FindFirstChild("ProximityPrompt") or blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
-
-										if prompt then
-											fireproximityprompt(prompt)
-										end
+										tbl11.RagdollRemote:FireServer(root, math.huge)
 									end)
-
-									humanoid.EvaluateStateMachine = true
+									ragdollFired = true
 								end
+
+								if not humanoid.SeatPart then
+									humanoid.Sit = false
+								end
+
+								pcall(blobHRP.Sit, blobHRP, humanoid)
+								pcall(function()
+									local prompt = blobHRP:FindFirstChild("ProximityPrompt") or blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
+
+									if prompt then
+										fireproximityprompt(prompt)
+									end
+								end)
+
+								humanoid.EvaluateStateMachine = true
 							end
 
 							local success = false
-							local checkStarted = os.clock()
+							local startTime = tick()
 
-							while os.clock() - checkStarted < 5 and runId == seatlessRunId and blobHRP.Parent do
+							while tick() - startTime < 5 do
 								task.wait()
 
 								local occupant = blobHRP.Occupant
@@ -26075,12 +26067,14 @@ end
 								end
 							end
 
-							-- 5. ANCHOR THE HRP - now that we're legitimately seated
+							-- 5. ANCHOR THE HRP - only now that we're legitimately seated
 							if success and runId == seatlessRunId and blobHRP.Parent then
 								blobHRP.Anchored = true
 							end
 
-							reveal()
+							if not desyncWasOn then
+								tbl12.SetDesync(false)
+							end
 
 							if runId ~= seatlessRunId then
 								return
@@ -35864,21 +35858,15 @@ Escape Timer: %*]]
 					return
 				end
 
-				-- don't claim EKI the instant ownership flips - only after we've held it for 0.4s straight
-				-- (a brief flicker of ownership no longer arms it), and never while the target is above us.
+				-- EKI Delay removed: the instant the engine says we simulate his root, claim the PhysicsRepRootPart,
+				-- no wait - a pre-arm delay here made EKI miss short-lived ownership windows in the tug-of-war and
+				-- effectively never arm. Still never claim it while the target is above us.
 				if tbl12.IsNetworkOwner(root) then
-					st.ownedSince = st.ownedSince or os.clock()
-				else
-					st.ownedSince = nil
-				end
+					local _, ourRoot = tbl12.Char()
+					local targetAboveUs = ourRoot and root.Position.Y > ourRoot.Position.Y
 
-				local _, ourRoot = tbl12.Char()
-				local targetAboveUs = ourRoot and root.Position.Y > ourRoot.Position.Y
-
-				if st.ownedSince and os.clock() - st.ownedSince >= 0.4 and not targetAboveUs then
-					if fn21(root, root) then
+					if not targetAboveUs and fn21(root, root) then
 						st.ekiOn, st.root, st.checkAt = true, root, os.clock()
-						st.ownedSince = nil
 					end
 				end
 			end
