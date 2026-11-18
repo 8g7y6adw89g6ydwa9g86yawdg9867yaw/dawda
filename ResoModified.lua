@@ -25912,21 +25912,36 @@ end
 								return
 							end
 
-							-- 2. SIT
-							pcall(blobHRP.Sit, blobHRP, humanoid)
-							task.wait(0.3)
+							-- CAMERA DESYNC: the exact same hidden-teleport trick SNO uses - our HRP/Head are forced back
+							-- to where we actually are, every render frame, while whatever happens below (sit attempts,
+							-- the teleport-and-reclaim loop) runs for real underneath. None of that process is visible;
+							-- the camera only catches up once we're actually seated (or we give up).
+							local head = oldCharacter:FindFirstChild("Head")
+							local hideCFrame = root.CFrame
+							local hideHeadCFrame = head and head.CFrame
 
-							-- 3. JUMP
+							RunService:BindToRenderStep("RSCSeatless", Enum.RenderPriority.Camera.Value - 1, function()
+								root.CFrame = hideCFrame
+								if head then
+									head.CFrame = hideHeadCFrame
+								end
+							end)
+
+							local function reveal()
+								pcall(RunService.UnbindFromRenderStep, RunService, "RSCSeatless")
+							end
+
+							-- 2. SIT, 3. JUMP, 4. ANCHOR - 0 delay, back to back
+							pcall(blobHRP.Sit, blobHRP, humanoid)
 							pcall(function()
 								humanoid.Jump = true
 							end)
-							task.wait(0.3)
 
 							if not (tbl8.SeatlessBlob and blobHRP.Parent) then
+								reveal()
 								return
 							end
 
-							-- 4. ANCHOR
 							blobHRP.Anchored = true
 
 							-- 5. RUN THE CODE: Position Desync instead of the old kill -> respawn -> ragdoll loop (that
@@ -25965,6 +25980,8 @@ end
 							if not desyncWasOn then
 								tbl12.SetDesync(false)
 							end
+
+							reveal()
 
 							if not (flag11 or not tbl8.SeatlessBlob) then
 								pcall(function()
