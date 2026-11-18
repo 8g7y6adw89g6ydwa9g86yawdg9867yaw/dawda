@@ -19361,6 +19361,7 @@ do
 
 							arg2 = arg2 or 0.65
 							local now3 = tick()
+							local lastChaseGrab = 0
 
 							while not flag11 and arg.Parent and not tbl12.IsPartOwner(arg) and v26.Health ~= 0 and v25.Parent and (not arg3 or arg3()) and tick() - now3 < arg2 do
 								if flag12 then
@@ -19377,10 +19378,24 @@ do
 									v28 = nil
 								end
 
-								-- MORE SETOWNERS WHILE CHASING: one SetNetworkOwner per heartbeat wasn't enough to
-								-- win it off a moving/contested target - burst 2 per frame instead of 1.
-								grab(arg, v28)
-								grab(arg, v28)
+								-- SAME TIMING AS EVERYWHERE ELSE: this used to burst 2 SetNetworkOwners every single
+								-- frame uncapped, which spiked ping on its own since every other chase/claim path in
+								-- the script is rate-limited. Match the generic Kick's own far-chase cadence instead.
+								local chaseBase = (tbl9.NKDelayMode == "Faster but worse") and 0.0049 or 0.0079
+								local chasePingLv = tbl12.PingLevel()
+
+								if chasePingLv >= 2 then
+									chaseBase *= 2.2
+								elseif chasePingLv == 1 then
+									chaseBase *= 1.4
+								end
+
+								local now4 = os.clock()
+
+								if now4 - lastChaseGrab >= chaseBase then
+									lastChaseGrab = now4
+									grab(arg, v28)
+								end
 							end
 						end)
 
@@ -25959,13 +25974,18 @@ end
 
 					-- SEATLESS BLOB, exact sequence: (1) spawn the Blobman at the fixed position, (2) sit on
 					-- it, (3) jump off, (4) run the kill/ragdoll/spam-sit code (ported from Inicio()), (5) once
-					-- we're really seated: anchor the VehicleSeat ("HRP") there, nothing else. tbl7.SeatlessSequence
-					-- is set for the whole attempt (from the moment we sit, since that's what actually moves our
-					-- character up to the spot) so Anti Void doesn't see us at this huge Y and snap us straight
-					-- back to spawn within 30ms - that was the real reason the blob never looked like it landed
-					-- where asked. Our own body/PCLD is otherwise never welded or desynced - only the Blobman
-					-- model ever gets touched (anchored, at step 5). If the blob gets deleted while this is on,
-					-- the whole sequence (spawn/sit/jump/run code/anchor) re-runs automatically.
+					-- we're really seated: anchor the VehicleSeat ("HRP") there, verified (re-asserted a few
+					-- times and only trusted once Anchored actually reads true), nothing else gets touched.
+					-- tbl7.SeatlessSequence is set for the whole attempt (from the moment we sit, since that's
+					-- what actually moves our character up to the spot) so Anti Void doesn't snap us back to
+					-- spawn mid-sequence. RETRY: any failure - spawn/sit/jump/seat not confirmed/anchor not
+					-- confirmed, OR the seat quietly breaking later while the model is still there, OR the
+					-- model being deleted outright - all count as "something went wrong" and retry the whole
+					-- sequence from spawn, up to 5 times total for this toggle-on, with a short pause between.
+					-- After 5 failures it gives up and teleports us back. Our own body/PCLD is otherwise never
+					-- welded or desynced - only the Blobman model ever gets touched. Whenever this toggle ends
+					-- (off, giving up, or replaced by a fresh toggle-on) we're teleported back to wherever we
+					-- were standing right before it first moved us.
 					local seatlessBlobPos = CFrame.new(0, 8000000, 0)
 					local seatlessRunId = 0
 
@@ -25978,8 +25998,7 @@ end
 						tbl7.SeatlessBlobModel = nil
 
 						-- TELEPORT BACK: whenever a previous attempt is being torn down (toggled off, a fresh
-						-- restart, the watchdog retrying) - put us back where we were before Seatless Blob ever
-						-- moved/seated us, instead of leaving us wherever the broken seat/death left us.
+						-- restart) - put us back where we were before Seatless Blob ever moved/seated us.
 						if tbl7.SeatlessHomeCF then
 							local _, oldRoot = tbl12.Char()
 							if oldRoot and oldRoot.Parent then
@@ -26000,129 +26019,182 @@ end
 								return
 							end
 
-							local blob = nil
 							tbl7.SeatlessHomeCF = root.CFrame
+							local retriesUsed = 0
 
-							local function abort(destroy)
-								if runId == seatlessRunId then
-									tbl7.SeatlessSequence = false
+							local function teleportHome()
+								if runId ~= seatlessRunId then
+									return
 								end
-
-								if destroy and blob then
-									tbl12.DestroyToy(blob)
-									tbl7.SeatlessBlobModel = nil
-								end
-
-								if runId == seatlessRunId and tbl7.SeatlessHomeCF then
-									local _, curRoot = tbl12.Char()
-									if curRoot and curRoot.Parent then
-										pcall(tbl12.Teleport, curRoot, tbl7.SeatlessHomeCF)
-									end
-									tbl7.SeatlessHomeCF = nil
+								local _, curRoot = tbl12.Char()
+								if curRoot and curRoot.Parent and tbl7.SeatlessHomeCF then
+									pcall(tbl12.Teleport, curRoot, tbl7.SeatlessHomeCF)
 								end
 							end
 
-							tbl7.SeatlessSequence = true
-
-							-- 1. SPAWN at the fixed position
-							blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
-							local blobHRP = blob and (blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1))
-							if not blobHRP then
-								abort(true)
-								return
-							end
-							if runId ~= seatlessRunId then
-								abort(true)
-								return
-							end
-							tbl7.SeatlessBlobModel = blob
-
-							-- 2. SIT
-							pcall(blobHRP.Sit, blobHRP, humanoid)
-							task.wait(0.1)
-							if runId ~= seatlessRunId or not blobHRP.Parent then
-								abort(true)
-								return
-							end
-
-							-- 3. JUMP OFF
-							pcall(function()
-								humanoid.Jump = true
-							end)
-							task.wait(0.1)
-							if runId ~= seatlessRunId or flag11 or not blobHRP.Parent then
-								abort(true)
-								return
-							end
-
-							-- 4. RUN THE CODE - ported verbatim from Inicio() (tick()-based, no extra guard before kill)
-							local t = tick()
-							local ragdollFired = false
-							humanoid.Health = 0
-							task.wait(1)
-							while runId == seatlessRunId and tick() - t < 4 do
-								RunService.Heartbeat:Wait()
-								humanoid.EvaluateStateMachine = false
-								humanoid.BreakJointsOnDeath = false
-								if not ragdollFired then
+							local function giveUp()
+								tbl7.SeatlessActive = false
+								tbl7.SeatlessSequence = false
+								teleportHome()
+								if not flag11 then
 									pcall(function()
-										tbl11.RagdollRemote:FireServer(root, math.huge)
+										lib:Notify({
+											Title = "Resonance",
+											Description = "Seatless Blob: kept failing, gave up after " .. retriesUsed .. " tries.",
+											IconColor = Color3.new(1, 1, 1),
+										})
 									end)
-									ragdollFired = true
 								end
-								if not humanoid.SeatPart then
-									humanoid.Sit = false
+							end
+
+							local attempt
+
+							local function fail(blob)
+								if blob then
+									tbl12.DestroyToy(blob)
 								end
-								pcall(blobHRP.Sit, blobHRP, humanoid)
+								tbl7.SeatlessBlobModel = nil
+								tbl7.SeatlessActive = false
+								tbl7.SeatlessSequence = false
+
+								if runId ~= seatlessRunId or flag11 or not tbl8.SeatlessBlob then
+									return
+								end
+
+								retriesUsed = retriesUsed + 1
+								if retriesUsed >= 5 then
+									giveUp()
+									return
+								end
+
+								task.wait(0.5)
+								if runId == seatlessRunId and tbl8.SeatlessBlob then
+									attempt()
+								end
+							end
+
+							attempt = function()
+								if runId ~= seatlessRunId or flag11 then
+									return
+								end
+								local character2, root2, humanoid2 = tbl12.Char()
+								if not (character2 and root2 and humanoid2 and humanoid2.Health > 0) then
+									fail(nil)
+									return
+								end
+
+								tbl7.SeatlessSequence = true
+
+								-- 1. SPAWN at the fixed position
+								local blob = tbl12.SpawnToy("CreatureBlobman", seatlessBlobPos)
+								local blobHRP = blob and (blob:FindFirstChild("VehicleSeat") or blob:WaitForChild("VehicleSeat", 1))
+								if not blobHRP or runId ~= seatlessRunId then
+									fail(blob)
+									return
+								end
+								tbl7.SeatlessBlobModel = blob
+
+								-- 2. SIT
+								pcall(blobHRP.Sit, blobHRP, humanoid2)
+								task.wait(0.1)
+								if runId ~= seatlessRunId or not blobHRP.Parent then
+									fail(blob)
+									return
+								end
+
+								-- 3. JUMP OFF
 								pcall(function()
-									local prompt = blobHRP:FindFirstChild("ProximityPrompt") or blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
-									if prompt then
-										fireproximityprompt(prompt)
+									humanoid2.Jump = true
+								end)
+								task.wait(0.1)
+								if runId ~= seatlessRunId or flag11 or not blobHRP.Parent then
+									fail(blob)
+									return
+								end
+
+								-- 4. RUN THE CODE - ported verbatim from Inicio() (tick()-based, no extra guard before kill)
+								local t = tick()
+								local ragdollFired = false
+								humanoid2.Health = 0
+								task.wait(1)
+								while runId == seatlessRunId and tick() - t < 4 do
+									RunService.Heartbeat:Wait()
+									humanoid2.EvaluateStateMachine = false
+									humanoid2.BreakJointsOnDeath = false
+									if not ragdollFired then
+										pcall(function()
+											tbl11.RagdollRemote:FireServer(root2, math.huge)
+										end)
+										ragdollFired = true
 									end
-								end)
-								humanoid.EvaluateStateMachine = true
-							end
-
-							local success = false
-							local startTime = tick()
-							while runId == seatlessRunId and tick() - startTime < 5 do
-								task.wait()
-								local occupant = blobHRP.Occupant
-								local _, _, ourHumanoid = tbl12.Char()
-								if occupant and (occupant == humanoid or occupant == ourHumanoid) then
-									success = true
-									break
+									if not humanoid2.SeatPart then
+										humanoid2.Sit = false
+									end
+									pcall(blobHRP.Sit, blobHRP, humanoid2)
+									pcall(function()
+										local prompt = blobHRP:FindFirstChild("ProximityPrompt") or blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
+										if prompt then
+											fireproximityprompt(prompt)
+										end
+									end)
+									humanoid2.EvaluateStateMachine = true
 								end
-								local seatWeld = blobHRP:FindFirstChild("SeatWeld")
-								if seatWeld and seatWeld.Part1 and (seatWeld.Part1 == root or (ourHumanoid and seatWeld.Part1.Parent and seatWeld.Part1.Parent:FindFirstChildOfClass("Humanoid") == ourHumanoid)) then
-									success = true
-									break
+
+								local success = false
+								local startTime = tick()
+								while runId == seatlessRunId and tick() - startTime < 5 do
+									task.wait()
+									local occupant = blobHRP.Occupant
+									local _, _, ourHumanoid = tbl12.Char()
+									if occupant and (occupant == humanoid2 or occupant == ourHumanoid) then
+										success = true
+										break
+									end
+									local seatWeld = blobHRP:FindFirstChild("SeatWeld")
+									if seatWeld and seatWeld.Part1 and (seatWeld.Part1 == root2 or (ourHumanoid and seatWeld.Part1.Parent and seatWeld.Part1.Parent:FindFirstChildOfClass("Humanoid") == ourHumanoid)) then
+										success = true
+										break
+									end
 								end
-							end
 
-							if runId ~= seatlessRunId then
-								abort(false)
-								return
-							end
+								if runId ~= seatlessRunId then
+									return
+								end
 
-							-- 5. ANCHOR THE HRP - only now that we're legitimately seated, exactly on its spot
-							if success and blobHRP.Parent then
-								pcall(function()
-									blob:PivotTo(seatlessBlobPos)
-									blobHRP.AssemblyLinearVelocity = Vector3.zero
-									blobHRP.AssemblyAngularVelocity = Vector3.zero
-									blobHRP.Anchored = true
-								end)
+								if not (success and blobHRP.Parent) then
+									fail(blob)
+									return
+								end
+
+								-- 5. ANCHOR THE HRP - verified: re-assert a few times and only trust it once
+								-- Anchored actually reads back true (physics this far out can be flaky)
+								local anchored = false
+
+								for _ = 1, 5 do
+									pcall(function()
+										blob:PivotTo(seatlessBlobPos)
+										blobHRP.AssemblyLinearVelocity = Vector3.zero
+										blobHRP.AssemblyAngularVelocity = Vector3.zero
+										blobHRP.Anchored = true
+									end)
+									task.wait()
+									if blobHRP.Anchored then
+										anchored = true
+										break
+									end
+								end
+
+								if not anchored then
+									fail(blob)
+									return
+								end
+
+								retriesUsed = 0
 								tbl7.SeatlessActive = true
 								tbl7.SeatlessSequence = false
-								tbl7.SeatlessSeatedAt = os.clock()
-							else
-								abort(true)
-							end
 
-							-- parent upvalue fix (Blobman features): the Humanoid.Seated signal doesn't reliably fire for
-							-- a seat taken like this, so it's set directly and kept set.
-							if success then
+								-- parent upvalue fix (Blobman features): the Humanoid.Seated signal doesn't reliably
+								-- fire for a seat taken like this, so it's set directly and kept set.
 								parent = blob
 								task.spawn(function()
 									while blob.Parent and tbl7.SeatlessBlobModel == blob and tbl8.SeatlessBlob and runId == seatlessRunId do
@@ -26130,11 +26202,9 @@ end
 										task.wait(0.25)
 									end
 								end)
-							end
 
-							-- wait for the server-side Blobman remote components to appear
-							local componentsReady = false
-							if success then
+								-- wait for the server-side Blobman remote components to appear
+								local componentsReady = false
 								local readyStarted = os.clock()
 								while os.clock() - readyStarted < 3 and runId == seatlessRunId and blob.Parent do
 									local components = tbl14.GetBlobmanComponents and tbl14.GetBlobmanComponents()
@@ -26144,48 +26214,42 @@ end
 									end
 									task.wait()
 								end
-							end
 
-							if not flag11 then
-								pcall(function()
-									lib:Notify({
-										Title = "Resonance",
-										Description = "Seatless Blob: " .. (success and "seated" or "failed to seat") .. " - Anchored: " .. tostring(success and blobHRP.Anchored or false) .. " - Blobman remotes: " .. (not success and "n/a" or componentsReady and "ready" or "not ready yet"),
-										IconColor = Color3.new(1, 1, 1),
-									})
-								end)
-							end
+								if not flag11 then
+									pcall(function()
+										lib:Notify({
+											Title = "Resonance",
+											Description = "Seatless Blob: seated - Anchored: " .. tostring(blobHRP.Anchored) .. " - Blobman remotes: " .. (componentsReady and "ready" or "not ready yet"),
+											IconColor = Color3.new(1, 1, 1),
+										})
+									end)
+								end
 
-							-- WATCHDOG: only re-run the whole sequence (fresh spawn) if the blob itself gets
-							-- deleted while the toggle is still on - not when someone else sits on it.
-							if success and not flag11 and tbl8.SeatlessBlob and runId == seatlessRunId then
-								local ancestryConn
-								ancestryConn = blob.AncestryChanged:Connect(function(_, newParent)
-									if not newParent then
-										ancestryConn:Disconnect()
+								-- PERSISTENT WATCHDOG: covers both the blob getting deleted outright AND the seat
+								-- quietly breaking (bumped, re-ragdolled, whatever) while the model is still there -
+								-- either one is "something went wrong" and goes through the same retry as a fresh
+								-- failure, including the teleport-back.
+								task.spawn(function()
+									while runId == seatlessRunId and tbl8.SeatlessBlob and not flag11 and blob.Parent and tbl7.SeatlessBlobModel == blob do
+										task.wait(0.5)
+										local _, _, curHumanoid = tbl12.Char()
+										local stillSeated = curHumanoid and (curHumanoid.SeatPart == blobHRP or blobHRP.Occupant == curHumanoid)
 
-										if tbl8.SeatlessBlob and runId == seatlessRunId then
-											-- SAFETY: if it keeps getting destroyed again almost instantly, stop
-											-- auto-retrying instead of looping respawn attempts as fast as
-											-- possible - a tight respawn loop like that is a likely crash cause.
-											if os.clock() - (tbl7.SeatlessSeatedAt or 0) < 2 then
-												if not flag11 then
-													pcall(function()
-														lib:Notify({
-															Title = "Resonance",
-															Description = "Seatless Blob kept getting destroyed right away - stopped auto-retrying.",
-															IconColor = Color3.new(1, 1, 1),
-														})
-													end)
-												end
-												return
-											end
-
-											task.spawn(tbl12.SeatlessBlob, true)
+										if not stillSeated then
+											tbl7.SeatlessBlobModel = nil
+											fail(blob)
+											return
 										end
+									end
+
+									if runId == seatlessRunId and tbl8.SeatlessBlob and not flag11 then
+										tbl7.SeatlessBlobModel = nil
+										fail(nil)
 									end
 								end)
 							end
+
+							attempt()
 						end)
 					end
 
@@ -31433,6 +31497,19 @@ end
 					end
 				end
 
+				-- CLEAN, NOT BUMPY (at least on our end): the hold's Position/velocity used to only get
+				-- refreshed once per remote-pacing cycle (~13ms), with physics free to drift him in between -
+				-- that gap is what looked "bumpy". A separate per-Heartbeat connection now keeps him pinned
+				-- every single frame, completely decoupled from how often the remotes themselves fire.
+				local smoothConn = RunService.Heartbeat:Connect(function()
+					v29.Position = (v23.CFrame * CFrame.new(options.BlobKickX.Value, options.BlobKickY.Value, options.BlobKickZ.Value)).Position
+					tbl12.ResetVelocity(v26)
+				end)
+
+				-- GET THEIR PCLD TOO: same EKI self-claim used elsewhere, so the server stops fighting the
+				-- hold above once we actually own him. Only claimed once, always released below.
+				local ekiClaimed = false
+
 				-- GUARANTEED CLEANUP: a single error anywhere in this loop (a destroyed RightWeld/RightOri,
 				-- weldConstraint gone, whatever) used to leave rootAttachment permanently reparented into v25,
 				-- the BodyPosition/BodyGyro never destroyed, NetworkIsSleeping/transparency never restored -
@@ -31452,8 +31529,10 @@ end
 						v28.RightWeld.Enabled = false
 						v28.RightOri.Attachment0 = nil
 						v28.RightWeld.Attachment0 = nil
-						v29.Position = (v23.CFrame * CFrame.new(options.BlobKickX.Value, options.BlobKickY.Value, options.BlobKickZ.Value)).Position
-						tbl12.ResetVelocity(v26)
+
+						if tbl8.EKI and sethiddenproperty and not ekiClaimed and tbl12.IsNetworkOwner(v26) then
+							ekiClaimed = pcall(sethiddenproperty, v26, "PhysicsRepRootPart", v26)
+						end
 
 						if tbl8.DeleteShurInBlobK then
 							task.spawn(tbl12.RemoveSticky, v25)
@@ -31486,8 +31565,14 @@ end
 					end
 				end)
 
+				smoothConn:Disconnect()
+
 				if sethiddenproperty then
 					pcall(sethiddenproperty, v27, "NetworkIsSleeping", false)
+
+					if ekiClaimed then
+						pcall(sethiddenproperty, v26, "PhysicsRepRootPart", nil)
+					end
 				end
 
 				for descendant, transparency in pairs(blobTCache) do
