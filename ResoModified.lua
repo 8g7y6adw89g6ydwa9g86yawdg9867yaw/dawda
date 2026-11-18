@@ -19276,24 +19276,19 @@ do
 							return false
 						end
 						local flag12 = false
-						local cframe = CFrame.new()
-						local cframe2 = CFrame.new()
 						local cframe3 = CFrame.new()
-						local connection = nil
+						local alignPos, alignOri = nil, nil
 
 						if (v25.Position - arg.Position).Magnitude >= 31 then
 							flag12 = true
 						end
 
-						-- WELD, the same trick as Weld.txt: a rigid AlignPosition/AlignOrientation constraint fights the
-						-- RenderStep snap-back right below it (that snap-back forcibly puts our HRP back at the
-						-- hidden/old CFrame every render frame to hide the teleport, while a rigid constraint is
-						-- simultaneously forcing it back to the real target every physics step - two competing CFrame
-						-- writers on the same part, which is what was "bugging a lot"), so no AlignPosition is used.
-						-- Instead the Heartbeat write below zeroes residual velocity and self-claims PhysicsRepRootPart
-						-- (the exact sethiddenproperty(Root, "PhysicsRepRootPart", Part) trick from Weld.txt, just
-						-- pointed at ourselves) so the engine treats our own rapid repositioning as locally-driven
-						-- instead of fighting it with replication corrections.
+						-- WELD SYSTEM: the same AlignPosition/AlignOrientation weld tbl12.CreateAlign already uses
+						-- for Blob Kick (holding a kicked target in place before grabbing them) now drives this
+						-- chase too, instead of a hard per-frame CFrame teleport. A force-based glide to cframe3
+						-- doesn't fight anything the way a hard CFrame overwrite would, so no RenderStep hide is
+						-- needed here - the self-claim on PhysicsRepRootPart (so the engine treats this as locally-
+						-- driven, not something to correct) is kept.
 
 						local flag13 = arg.Name == "HumanoidRootPart" or arg.Name == "Torso"
 						local v27 = nil
@@ -19323,41 +19318,31 @@ do
 						tbl7.States.Owning = true
 
 						local function fn21()
-							cframe2 = v25.CFrame
-							cframe = head.CFrame
 							cframe3 = v25.CFrame
 
-							RunService:BindToRenderStep("RSCClient", Enum.RenderPriority.Camera.Value - 1, function()
-								v25.CFrame = cframe2
-								head.CFrame = cframe
-							end)
-
-							-- fewer physics collisions fighting us at the far end while this hidden teleport is active
+							-- fewer physics collisions fighting us at the far end while this weld-glide is active
 							pcall(tbl12.ToggleCollisions, v24, false)
 
-							connection = RunService.Heartbeat:Connect(function()
-								cframe2 = v25.CFrame
-								cframe = head.CFrame
-								v25.CFrame = cframe3
-								head.CFrame = cframe3
-								v25.AssemblyLinearVelocity = Vector3.zero
-								v25.AssemblyAngularVelocity = Vector3.zero
-								pcall(sethiddenproperty, v25, "PhysicsRepRootPart", v25)
-							end)
+							alignPos, alignOri = tbl12.CreateAlign(v25, true)
+							alignPos.Position = cframe3.Position
+							alignOri.CFrame = cframe3 - cframe3.Position
+
+							pcall(sethiddenproperty, v25, "PhysicsRepRootPart", v25)
 						end
 
 						local function fn22()
-							RunService:UnbindFromRenderStep("RSCClient")
+							if alignPos then
+								alignPos:Destroy()
+								alignPos = nil
+							end
 
-							if connection then
-								connection:Disconnect()
-								connection = nil
+							if alignOri then
+								alignOri:Destroy()
+								alignOri = nil
 							end
 
 							pcall(tbl12.ToggleCollisions, v24, true)
 							pcall(sethiddenproperty, v25, "PhysicsRepRootPart", nil)
-							head.CFrame = cframe
-							v25.CFrame = cframe2
 						end
 
 						local ok, result = pcall(function()
@@ -19371,6 +19356,14 @@ do
 							while not flag11 and arg.Parent and not tbl12.IsPartOwner(arg) and v26.Health ~= 0 and v25.Parent and (not arg3 or arg3()) and tick() - now3 < arg2 do
 								if flag12 then
 									cframe3 = tbl12.PredictCFrame(arg) - Vector3.new(0, 22, 0)
+
+									if alignPos and alignPos.Parent then
+										alignPos.Position = cframe3.Position
+									end
+
+									if alignOri and alignOri.Parent then
+										alignOri.CFrame = cframe3 - cframe3.Position
+									end
 								end
 
 								RunService.Heartbeat:Wait()
@@ -21144,6 +21137,52 @@ end
 						end
 
 						tbl12.SetRuntimeConnection("Desync", RunService.Heartbeat, desync, tbl12.UpdateDesync)
+					end
+
+					-- DESYNC PCLD: manual keybind version of the same double-kill/respawn trick AntiKick2's
+					-- automatic "PCLD Breaker" uses, just runnable on demand instead of waiting for it to trip.
+					tbl12.DesyncPCLD = function()
+						local character, root, humanoid = tbl12.Char()
+
+						if not (character and humanoid) then
+							return
+						end
+
+						fn18("Starting PCLD Desync...", "Desync PCLD")
+
+						local result = nil
+
+						if humanoid.Health > 0 then
+							task.spawn(function()
+								repeat
+									humanoid.Health = 0
+									humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+									task.wait()
+								until result
+							end)
+						end
+
+						result = localPlayer.CharacterAdded:Wait()
+						local newHumanoid = result:WaitForChild("Humanoid", 5)
+
+						if newHumanoid then
+							local result2 = nil
+
+							task.spawn(function()
+								repeat
+									newHumanoid.Health = 0
+									newHumanoid:ChangeState(Enum.HumanoidStateType.Dead)
+									task.wait()
+								until result2
+							end)
+
+							result2 = localPlayer.CharacterAdded:Wait()
+							local newHumanoid2 = result2:WaitForChild("Humanoid", 5)
+
+							if newHumanoid2 then
+								fn18("Done!", "Desync PCLD")
+							end
+						end
 					end
 				end
 			end
@@ -25876,17 +25915,19 @@ end
 						end
 					end
 
-					-- SEATLESS BLOB, in order: (1) spawn the Blobman at a fixed, far-away world position and wait for
-					-- it to actually be there, (2) sit on it normally while it's still unanchored and welds like any
-					-- other toy, (3) jump, to prove we can still get in/out before anything is locked down, (4) THEN
-					-- anchor its VehicleSeat (its "HRP") - which immediately kicks us back out, so (5) run the real
-					-- target-kill (the same one tbl12.Kill uses) -> ragdoll -> spam Sit/fireproximityprompt code to
-					-- force the seat to take anyway, the same trick an anchored seat needs since it rejects a normal
-					-- sit. Kept unnamed so the normal Blobman features (Kick/Kill/etc, which key off sitting on a
-					-- model literally named "CreatureBlobman") still work while this is active. If the blob gets
-					-- deleted or someone else sits on it afterwards, the whole sequence is re-run automatically.
-					-- Off just deletes the blob again.
-					local seatlessBlobPos = CFrame.new(283300, 2147483647, -5705000)
+					-- SEATLESS BLOB, in order: (1) spawn the Blobman really high up and wait for it to actually be
+					-- there, (2) sit on it normally while it's still unanchored and welds like any other toy, (3)
+					-- jump, to prove we can still get in/out before anything is locked down, (4) THEN anchor its
+					-- VehicleSeat (its "HRP") - which immediately kicks us back out, so (5) run the kill/ragdoll/
+					-- spam-sit code (ported straight from the Inicio() script: kill but never wait for a respawn -
+					-- the same, now-dead humanoid/root gets spam-sat onto the seat, which is what actually makes it
+					-- take) to force the seat anyway. This logic is local to Seatless Blob only - nothing else calls
+					-- it. Kept unnamed so the normal Blobman features (Kick/Kill/etc, which key off sitting on a
+					-- model literally named "CreatureBlobman") still work while this is active; `parent` is also set
+					-- directly the moment we're seated, instead of relying on the Humanoid.Seated signal, since that
+					-- signal doesn't reliably fire for this hacky a seat. If the blob gets deleted, the whole
+					-- sequence is re-run automatically. Off just deletes the blob again.
+					local seatlessBlobPos = CFrame.new(283300, 700000000, -5705000)
 					local seatlessRunId = 0
 
 					tbl12.SeatlessBlob = function(enable)
@@ -25978,53 +26019,64 @@ end
 								return
 							end
 
-							-- 5. RUN THE CODE: an anchored seat rejects a normal sit, so kill (the same target-kill
-							-- tbl12.Kill fires on other players) -> ragdoll -> respawn and spam Sit/fireproximityprompt
-							-- on the fresh character until the seat actually takes.
-							humanoid.BreakJointsOnDeath = false
-							pcall(function()
-								humanoid:ChangeState(Enum.HumanoidStateType.Dead)
-							end)
+							-- 5. RUN THE CODE (ported from Inicio()): kill, then spam-sit the SAME humanoid/root -
+							-- never wait for a respawn, the corpse getting seated is what actually makes this work.
+							local ragdollFired = false
 
-							local newCharacter = localPlayer.CharacterAdded:Wait()
-							local newHumanoid = newCharacter:WaitForChild("Humanoid", 5)
-							local newRoot = newCharacter:WaitForChild("HumanoidRootPart", 5)
+							if not (blobHRP.Occupant and blobHRP.Occupant.Parent and blobHRP.Occupant.Parent.Name == localPlayer.Name) then
+								humanoid.Health = 0
+								task.wait(1)
 
-							local success = false
+								local spamStarted = os.clock()
 
-							if newHumanoid and newRoot and blobHRP.Parent and runId == seatlessRunId then
-								pcall(function()
-									tbl11.RagdollRemote:FireServer(newRoot, 0.15)
-								end)
-								task.wait(0.1)
-								pcall(function()
-									tbl11.RagdollRemote:FireServer(newRoot, 0)
-								end)
+								while os.clock() - spamStarted < 4 and runId == seatlessRunId and blobHRP.Parent do
+									RunService.Heartbeat:Wait()
+									humanoid.EvaluateStateMachine = false
+									humanoid.BreakJointsOnDeath = false
 
-								local started = os.clock()
-
-								while os.clock() - started < 3 and not flag11 and runId == seatlessRunId and blobHRP.Parent do
-									pcall(tbl12.Teleport, newRoot, blobHRP.CFrame * CFrame.new(0, 2, 0))
-
-									if not newHumanoid.SeatPart then
-										newHumanoid.Sit = false
+									if not ragdollFired then
+										pcall(function()
+											tbl11.RagdollRemote:FireServer(root, math.huge)
+										end)
+										ragdollFired = true
 									end
 
-									pcall(blobHRP.Sit, blobHRP, newHumanoid)
+									if not humanoid.SeatPart then
+										humanoid.Sit = false
+									end
+
+									pcall(blobHRP.Sit, blobHRP, humanoid)
 									pcall(function()
-										local prompt = blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
+										local prompt = blobHRP:FindFirstChild("ProximityPrompt") or blobHRP:FindFirstChildWhichIsA("ProximityPrompt")
 
 										if prompt then
 											fireproximityprompt(prompt)
 										end
 									end)
 
-									if newHumanoid.SeatPart == blobHRP then
-										success = true
-										break
-									end
+									humanoid.EvaluateStateMachine = true
+								end
+							end
 
-									task.wait(0.1)
+							local success = false
+							local checkStarted = os.clock()
+
+							while os.clock() - checkStarted < 5 and runId == seatlessRunId and blobHRP.Parent do
+								task.wait()
+
+								local occupant = blobHRP.Occupant
+								local _, _, ourHumanoid = tbl12.Char()
+
+								if occupant and (occupant == humanoid or occupant == ourHumanoid) then
+									success = true
+									break
+								end
+
+								local seatWeld = blobHRP:FindFirstChild("SeatWeld")
+
+								if seatWeld and seatWeld.Part1 and (seatWeld.Part1 == root or (ourHumanoid and seatWeld.Part1.Parent and seatWeld.Part1.Parent:FindFirstChildOfClass("Humanoid") == ourHumanoid)) then
+									success = true
+									break
 								end
 							end
 
@@ -26032,6 +26084,26 @@ end
 
 							if runId ~= seatlessRunId then
 								return
+							end
+
+							-- Blobman features (Kick/Kill/etc) read the shared `parent` upvalue, normally kept in
+							-- sync by Humanoid.Seated - which doesn't reliably fire for this forced a seat. Set it
+							-- directly, then keep re-asserting it for as long as we're actually the occupant.
+							if success then
+								parent = blob
+
+								task.spawn(function()
+									while blob.Parent and tbl7.SeatlessBlobModel == blob and tbl8.SeatlessBlob do
+										local occupant = blobHRP.Occupant
+										local _, _, ourHumanoid = tbl12.Char()
+
+										if occupant and (occupant == humanoid or occupant == ourHumanoid) then
+											parent = blob
+										end
+
+										task.wait(0.5)
+									end
+								end)
 							end
 
 							if not flag11 then
@@ -26044,32 +26116,17 @@ end
 								end)
 							end
 
-							-- WATCHDOG: if the blob gets deleted, or somebody else sits on it, re-run the whole
-							-- sequence from scratch (fresh spawn) as long as the toggle is still on.
+							-- WATCHDOG: only re-run the whole sequence (fresh spawn) if the blob itself gets
+							-- deleted while the toggle is still on - not when someone else sits on it.
 							if success and not flag11 and tbl8.SeatlessBlob and runId == seatlessRunId then
-								local function retrigger()
-									if tbl8.SeatlessBlob and runId == seatlessRunId then
-										task.spawn(tbl12.SeatlessBlob, true)
-									end
-								end
-
 								local ancestryConn
-								ancestryConn = blob.AncestryChanged:Connect(function(_, parent)
-									if not parent then
+								ancestryConn = blob.AncestryChanged:Connect(function(_, newParent)
+									if not newParent then
 										ancestryConn:Disconnect()
-										retrigger()
-									end
-								end)
 
-								local occupantConn
-								occupantConn = blobHRP:GetPropertyChangedSignal("Occupant"):Connect(function()
-									local occupant = blobHRP.Occupant
-									local _, _, ourHumanoid = tbl12.Char()
-
-									if occupant and occupant ~= ourHumanoid then
-										occupantConn:Disconnect()
-										ancestryConn:Disconnect()
-										retrigger()
+										if tbl8.SeatlessBlob and runId == seatlessRunId then
+											task.spawn(tbl12.SeatlessBlob, true)
+										end
 									end
 								end)
 							end
@@ -36627,6 +36684,16 @@ Escape Timer: %*]]
 			})
 
 			Character:AddLabel("Only use this if you have >= 100FPS!", true)
+
+			Character:AddButton({
+				Text = "Desync PCLD",
+				Func = tbl12.DesyncPCLD,
+			}):AddKeyPicker("DesyncPCLDKey", {
+				Text = "Desync PCLD",
+				Default = nil,
+				Mode = "Press",
+				NoUI = false,
+			})
 		end
 
 		do
