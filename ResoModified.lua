@@ -25976,6 +25976,18 @@ end
 							tbl12.DestroyToy(tbl7.SeatlessBlobModel)
 						end
 						tbl7.SeatlessBlobModel = nil
+
+						-- TELEPORT BACK: whenever a previous attempt is being torn down (toggled off, a fresh
+						-- restart, the watchdog retrying) - put us back where we were before Seatless Blob ever
+						-- moved/seated us, instead of leaving us wherever the broken seat/death left us.
+						if tbl7.SeatlessHomeCF then
+							local _, oldRoot = tbl12.Char()
+							if oldRoot and oldRoot.Parent then
+								pcall(tbl12.Teleport, oldRoot, tbl7.SeatlessHomeCF)
+							end
+							tbl7.SeatlessHomeCF = nil
+						end
+
 						seatlessRunId += 1
 						if not enable then
 							return
@@ -25989,14 +26001,24 @@ end
 							end
 
 							local blob = nil
+							tbl7.SeatlessHomeCF = root.CFrame
 
 							local function abort(destroy)
 								if runId == seatlessRunId then
 									tbl7.SeatlessSequence = false
 								end
+
 								if destroy and blob then
 									tbl12.DestroyToy(blob)
 									tbl7.SeatlessBlobModel = nil
+								end
+
+								if runId == seatlessRunId and tbl7.SeatlessHomeCF then
+									local _, curRoot = tbl12.Char()
+									if curRoot and curRoot.Parent then
+										pcall(tbl12.Teleport, curRoot, tbl7.SeatlessHomeCF)
+									end
+									tbl7.SeatlessHomeCF = nil
 								end
 							end
 
@@ -30983,32 +31005,37 @@ end
 
 			local n36 = os.clock() + 2
 
-			while true do
-				for _, v26 in ipairs(tbl16) do
-					if v26.Root.Parent then
-						v26.Root.CFrame = v26.CFrame
-						tbl12.ResetVelocity(v26.Root)
+			-- GUARANTEED CLEANUP: one error anywhere in this hold (a destroyed Root, whatever) used to skip
+			-- fn21 entirely, leaking the BlobKickAP/AO, the claimed PCLD/NetworkIsSleeping on each target, and
+			-- the RightWeld attachment reset - the same kind of silent corruption fixed in LoopKick just now.
+			pcall(function()
+				while true do
+					for _, v26 in ipairs(tbl16) do
+						if v26.Root.Parent then
+							v26.Root.CFrame = v26.CFrame
+							tbl12.ResetVelocity(v26.Root)
 
-						-- IMPROVE THE HOLD + stop his own body desyncing/flailing on his screen while we run
-						-- around: same NetworkIsSleeping trick used in every other kick, always released above.
-						if sethiddenproperty and not sleepSet[v26.Root] then
-							sleepSet[v26.Root] = pcall(sethiddenproperty, v26.Root, "NetworkIsSleeping", true)
-						end
+							-- IMPROVE THE HOLD + stop his own body desyncing/flailing on his screen while we run
+							-- around: same NetworkIsSleeping trick used in every other kick, always released above.
+							if sethiddenproperty and not sleepSet[v26.Root] then
+								sleepSet[v26.Root] = pcall(sethiddenproperty, v26.Root, "NetworkIsSleeping", true)
+							end
 
-						-- EKI: also claim the target's own PCLD while he's held in place here, same technique
-						-- used elsewhere, so the server stops fighting the pin above.
-						if tbl8.EKI and sethiddenproperty and not ekiClaimed[v26.Root] and tbl12.IsNetworkOwner(v26.Root) then
-							ekiClaimed[v26.Root] = pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", v26.Root)
+							-- EKI: also claim the target's own PCLD while he's held in place here, same technique
+							-- used elsewhere, so the server stops fighting the pin above.
+							if tbl8.EKI and sethiddenproperty and not ekiClaimed[v26.Root] and tbl12.IsNetworkOwner(v26.Root) then
+								ekiClaimed[v26.Root] = pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", v26.Root)
+							end
 						end
 					end
-				end
 
-				RunService.Heartbeat:Wait()
-				if not (n36 <= os.clock()) then
-					continue
+					RunService.Heartbeat:Wait()
+					if not (n36 <= os.clock()) then
+						continue
+					end
+					break
 				end
-				break
-			end
+			end)
 
 			fn21()
 			return true
@@ -31406,51 +31433,58 @@ end
 					end
 				end
 
-				while arg.Parent and v26.Parent and v27.Parent and v27.Health > 0 and parent and parent.Parent and tbl7.SelectedPlayersBlob[arg] and tbl8.LoopApplyMethod and tbl9.BlobMethod == "Kick" and tbl12.GetMagnitude(v23, v26) <= 41 and not v27.SeatPart and (v24.Sit or tbl7.SeatlessActive) do
-					task.spawn(function()
-						v27.RequiresNeck = false
-						tbl12.ToggleMotor6D(v25, false, true)
-						tbl12.RepositionLimbs(v25)
-					end)
+				-- GUARANTEED CLEANUP: a single error anywhere in this loop (a destroyed RightWeld/RightOri,
+				-- weldConstraint gone, whatever) used to leave rootAttachment permanently reparented into v25,
+				-- the BodyPosition/BodyGyro never destroyed, NetworkIsSleeping/transparency never restored -
+				-- silent corruption that gets worse the more times Blob Kick is used, and a plausible
+				-- contributor to things getting unstable over a long session. Now wrapped in pcall with
+				-- cleanup always running after, success or not.
+				pcall(function()
+					while arg.Parent and v26.Parent and v27.Parent and v27.Health > 0 and parent and parent.Parent and tbl7.SelectedPlayersBlob[arg] and tbl8.LoopApplyMethod and tbl9.BlobMethod == "Kick" and tbl12.GetMagnitude(v23, v26) <= 41 and not v27.SeatPart and (v24.Sit or tbl7.SeatlessActive) do
+						task.spawn(function()
+							v27.RequiresNeck = false
+							tbl12.ToggleMotor6D(v25, false, true)
+							tbl12.RepositionLimbs(v25)
+						end)
 
-					task.spawn(tbl12.ToggleCollisions, v25, false)
-					v28.RightOri.Enabled = false
-					v28.RightWeld.Enabled = false
-					v28.RightOri.Attachment0 = nil
-					v28.RightWeld.Attachment0 = nil
-					v29.Position = (v23.CFrame * CFrame.new(options.BlobKickX.Value, options.BlobKickY.Value, options.BlobKickZ.Value)).Position
-					tbl12.ResetVelocity(v26)
+						task.spawn(tbl12.ToggleCollisions, v25, false)
+						v28.RightOri.Enabled = false
+						v28.RightWeld.Enabled = false
+						v28.RightOri.Attachment0 = nil
+						v28.RightWeld.Attachment0 = nil
+						v29.Position = (v23.CFrame * CFrame.new(options.BlobKickX.Value, options.BlobKickY.Value, options.BlobKickZ.Value)).Position
+						tbl12.ResetVelocity(v26)
 
-					if tbl8.DeleteShurInBlobK then
-						task.spawn(tbl12.RemoveSticky, v25)
-					end
+						if tbl8.DeleteShurInBlobK then
+							task.spawn(tbl12.RemoveSticky, v25)
+						end
 
-					-- lower the Blobman Kick remotes rate by 0.0004s (fewer CreatureGrab/CreatureDrop/CreatureRelease per second)
-					if tbl9.BKMethod == 1 then
-						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait(0.01535)
-						v28.CreatureDrop:FireServer(v28.RightWeld)
-						task.wait(0.01535)
+						-- both Blob Kick methods down another 0.0015s
+						if tbl9.BKMethod == 1 then
+							v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
+							task.wait(0.01385)
+							v28.CreatureDrop:FireServer(v28.RightWeld)
+							task.wait(0.01385)
 
-						if tbl8.NetworkOwnerInKick then
+							if tbl8.NetworkOwnerInKick then
+								tbl12.Grab(v26)
+								tbl12.RNO(v26)
+							end
+						else
+							v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
+							task.wait(0.01335)
+							v28.CreatureRelease:FireServer(v28.RightWeld)
 							tbl12.Grab(v26)
-							tbl12.RNO(v26)
-						end
-					else
-						-- "Release" kick: a little bit faster
-						v28.CreatureGrab:FireServer(nil, v26, v28.RightWeld)
-						task.wait(0.01485)
-						v28.CreatureRelease:FireServer(v28.RightWeld)
-						tbl12.Grab(v26)
-						task.spawn(tbl12.Ragdoll, v25)
+							task.spawn(tbl12.Ragdoll, v25)
 
-						if weldConstraint.Enabled then
-							tbl12.RNO(v26)
-						end
+							if weldConstraint.Enabled then
+								tbl12.RNO(v26)
+							end
 
-						task.wait(0.01485)
+							task.wait(0.01335)
+						end
 					end
-				end
+				end)
 
 				if sethiddenproperty then
 					pcall(sethiddenproperty, v27, "NetworkIsSleeping", false)
@@ -31462,11 +31496,22 @@ end
 					end
 				end
 
-				rootAttachment.Parent = v26
+				if rootAttachment then
+					pcall(function()
+						rootAttachment.Parent = v26
+					end)
+				end
+
 				task.spawn(tbl12.ToggleMotor6D, v25, true)
 				task.spawn(tbl12.ToggleCollisions, v25, true)
-				v30:Destroy()
-				v29:Destroy()
+
+				if v30 then
+					pcall(v30.Destroy, v30)
+				end
+
+				if v29 then
+					pcall(v29.Destroy, v29)
+				end
 			end
 		end
 
