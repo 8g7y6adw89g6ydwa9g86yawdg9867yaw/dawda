@@ -31035,7 +31035,6 @@ end
 
 			v22.CreatureGrab:FireServer(nil, v24, v22.RightWeld)
 
-			local ekiClaimed = {}
 			local sleepSet = {}
 
 			local function fn21()
@@ -31051,17 +31050,11 @@ end
 					end
 				end
 
-				-- always hand back any PCLD claimed below, and let their body stop being "asleep"
+				-- let their body stop being "asleep" - we never touch/claim his own PCLD, only this
 				if sethiddenproperty then
 					for _, v26 in ipairs(tbl16) do
-						if v26.Root.Parent then
-							if ekiClaimed[v26.Root] then
-								pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", nil)
-							end
-
-							if sleepSet[v26.Root] then
-								pcall(sethiddenproperty, v26.Root, "NetworkIsSleeping", false)
-							end
+						if v26.Root.Parent and sleepSet[v26.Root] then
+							pcall(sethiddenproperty, v26.Root, "NetworkIsSleeping", false)
 						end
 					end
 				end
@@ -31070,8 +31063,8 @@ end
 			local n36 = os.clock() + 2
 
 			-- GUARANTEED CLEANUP: one error anywhere in this hold (a destroyed Root, whatever) used to skip
-			-- fn21 entirely, leaking the BlobKickAP/AO, the claimed PCLD/NetworkIsSleeping on each target, and
-			-- the RightWeld attachment reset - the same kind of silent corruption fixed in LoopKick just now.
+			-- fn21 entirely, leaking the BlobKickAP/AO, the claimed NetworkIsSleeping on each target, and the
+			-- RightWeld attachment reset - the same kind of silent corruption fixed in LoopKick just now.
 			pcall(function()
 				while true do
 					for _, v26 in ipairs(tbl16) do
@@ -31081,14 +31074,9 @@ end
 
 							-- IMPROVE THE HOLD + stop his own body desyncing/flailing on his screen while we run
 							-- around: same NetworkIsSleeping trick used in every other kick, always released above.
+							-- Not his PhysicsRepRootPart/PCLD - that stays untouched.
 							if sethiddenproperty and not sleepSet[v26.Root] then
 								sleepSet[v26.Root] = pcall(sethiddenproperty, v26.Root, "NetworkIsSleeping", true)
-							end
-
-							-- EKI: also claim the target's own PCLD while he's held in place here, same technique
-							-- used elsewhere, so the server stops fighting the pin above.
-							if tbl8.EKI and sethiddenproperty and not ekiClaimed[v26.Root] and tbl12.IsNetworkOwner(v26.Root) then
-								ekiClaimed[v26.Root] = pcall(sethiddenproperty, v26.Root, "PhysicsRepRootPart", v26.Root)
 							end
 						end
 					end
@@ -31506,10 +31494,6 @@ end
 					tbl12.ResetVelocity(v26)
 				end)
 
-				-- GET THEIR PCLD TOO: same EKI self-claim used elsewhere, so the server stops fighting the
-				-- hold above once we actually own him. Only claimed once, always released below.
-				local ekiClaimed = false
-
 				-- GUARANTEED CLEANUP: a single error anywhere in this loop (a destroyed RightWeld/RightOri,
 				-- weldConstraint gone, whatever) used to leave rootAttachment permanently reparented into v25,
 				-- the BodyPosition/BodyGyro never destroyed, NetworkIsSleeping/transparency never restored -
@@ -31529,10 +31513,6 @@ end
 						v28.RightWeld.Enabled = false
 						v28.RightOri.Attachment0 = nil
 						v28.RightWeld.Attachment0 = nil
-
-						if tbl8.EKI and sethiddenproperty and not ekiClaimed and tbl12.IsNetworkOwner(v26) then
-							ekiClaimed = pcall(sethiddenproperty, v26, "PhysicsRepRootPart", v26)
-						end
 
 						if tbl8.DeleteShurInBlobK then
 							task.spawn(tbl12.RemoveSticky, v25)
@@ -31569,10 +31549,6 @@ end
 
 				if sethiddenproperty then
 					pcall(sethiddenproperty, v27, "NetworkIsSleeping", false)
-
-					if ekiClaimed then
-						pcall(sethiddenproperty, v26, "PhysicsRepRootPart", nil)
-					end
 				end
 
 				for descendant, transparency in pairs(blobTCache) do
